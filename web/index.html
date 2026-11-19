@@ -111,7 +111,11 @@ function home(){
   const bf = S.server.bootfiles, needBf = ['undionly.kpxe','wimboot'].filter(f=>!bf.includes(f)).concat(bf.includes('snponly.efi')||bf.includes('ipxe.efi')?[]:['snponly.efi']);
   const hasWin = ready.some(e=>e.boot.type==='windows');
   const step = (ok, txt) => `<li>${ok?'✅':'⬜'} ${txt}</li>`;
+  const px = S.server.pxe || {}, pxeOff = !S.server.pxe_enabled || !Object.values(px).every(Boolean);
   return `<h1>Overview</h1><p class="sub">Network-boot any PC into an OS installer, and push software to PCs that run the agent.</p>
+  ${pxeOff?`<div class="card" style="border-color:#fcd34d;background:#fffbeb;margin-bottom:14px">⚠️ <b>Network boot (OS install) is off.</b>
+    ${S.server.pxe_enabled?'LANDeploy could not open ports 67/69 — it needs <b>administrator rights</b>: close LANDeploy and start it again, then accept the password prompt. (Or another DHCP/TFTP server runs on this PC.)':'Started without network boot.'}
+    Software deployment works normally.</div>`:''}
   <div class="cards">
     <div class="card"><div class="n">${ready.length}</div><div class="l">OS images ready</div></div>
     <div class="card"><div class="n">${Object.keys(S.machines).length}</div><div class="l">Computers seen</div></div>

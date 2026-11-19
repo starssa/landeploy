@@ -78,6 +78,7 @@ class ProxyDHCP:
 
     def __init__(self, server_ip, choose_bootfile, on_seen=None):
         self.ip, self.choose, self.on_seen = server_ip, choose_bootfile, on_seen
+        self.ok = False
 
     def start(self):
         for port in (67, 4011):
@@ -94,6 +95,8 @@ class ProxyDHCP:
                       "server runs on this machine.", port, e)
             return
         log.info("ProxyDHCP listening on UDP %d", port)
+        if port == 67:
+            self.ok = True
         while True:
             try:
                 data, addr = s.recvfrom(4096)
@@ -129,6 +132,7 @@ class TFTPServer:
 
     def __init__(self, root):
         self.root = Path(root).resolve()
+        self.ok = False
 
     def start(self):
         threading.Thread(target=self._serve, daemon=True, name="tftp").start()
@@ -142,6 +146,7 @@ class TFTPServer:
             log.error("TFTP cannot bind UDP 69 (%s). Run as root/admin.", e)
             return
         log.info("TFTP serving %s on UDP 69", self.root)
+        self.ok = True
         while True:
             data, addr = s.recvfrom(2048)
             if data[:2] == b"\0\1":

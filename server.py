@@ -9,6 +9,7 @@ import hashlib
 import json
 import logging
 import mimetypes
+import os
 import re
 import secrets
 import shutil
@@ -25,7 +26,7 @@ import library
 import tools
 import pxe
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 # RES: bundled read-only files (web/, agent/). HOME: where data/ and bootfiles/ live.
 # When packaged with PyInstaller, RES is the unpack folder and HOME is the folder of the executable.
 FROZEN = getattr(sys, "frozen", False)
@@ -166,15 +167,16 @@ class Library:
 
 # ====================================================================== HTTP
 class App:
-    def __init__(self, data_dir):
+    def __init__(self, data_dir, bootfiles=None):
         self.store = Store(data_dir)
         s = self.store.settings
         self.ip = s["server_ip"] or detect_ip()
         self.port = int(s["http_port"])
         self.base = f"http://{self.ip}:{self.port}"
-        self.bootfiles = HOME / "bootfiles"
-        self.bootfiles.mkdir(exist_ok=True)
+        self.bootfiles = Path(bootfiles) if bootfiles else HOME / "bootfiles"
+        self.bootfiles.mkdir(parents=True, exist_ok=True)
         self.lib = Library(self.store)
+        self.services = {}          # "dhcp"/"tftp" -> service object with .ok once its port is bound
         self.tools = tools.Tools(self.store.dir / "tools", self.bootfiles)
 
     # ------------------------------------------------ PXE hooks
@@ -441,7 +443,9 @@ def make_handler(app):
                     d = json.loads(json.dumps(st.d))
                 d["server"] = {"ip": app.ip, "port": app.port, "base": app.base,
                                "bootfiles": sorted(x.name for x in app.bootfiles.glob("*") if x.is_file()),
-                               "data_dir": str(st.dir.resolve()), "version": VERSION}
+                               "data_dir": str(st.dir.resolve()), "version": VERSION,
+                               "pxe": {k: getattr(v, "ok", False) for k, v in app.services.items()},
+                               "pxe_enabled": bool(app.services)}
                 d["tools"] = app.tools.info()
                 return self.send(body=d)
             if p == "/api/smbconf":
@@ -666,18 +670,56 @@ def make_handler(app):
     return H
 
 
-def main():
+def watch_parent(pid):
+    """Exit when the desktop window that started us goes away (we may run elevated, separately)."""
+    def alive():
+        if os.name == "nt":
+            import ctypes
+            h = ctypes.windll.kernel32.OpenProcess(0x00100000, False, pid)      # SYNCHRONIZE
+            if not h:
+                return False
+            still = ctypes.windll.kernel32.WaitForSingleObject(h, 0) == 0x102   # WAIT_TIMEOUT
+            ctypes.windll.kernel32.CloseHandle(h)
+            return still
+        try:
+            os.kill(pid, 0)
+            return True
+        except PermissionError:
+            return True
+        except OSError:
+            return False
+
+    def loop():
+        while alive():
+            time.sleep(2)
+        log.info("Desktop app closed, stopping server")
+        os._exit(0)
+    threading.Thread(target=loop, daemon=True, name="parent-watch").start()
+
+
+def main(argv=None):
     ap = argparse.ArgumentParser(description="LANDeploy server")
     ap.add_argument("--version", action="version", version=f"LANDeploy {VERSION}")
     ap.add_argument("--data", default=str(HOME / "data"), help="data folder (ISOs, extracted trees, packages)")
+    ap.add_argument("--bootfiles", help="folder with iPXE/wimboot files (default: next to the program)")
     ap.add_argument("--ip", help="IP address of this server on the LAN (auto-detected)")
     ap.add_argument("--port", type=int, help="HTTP port (default 8080)")
     ap.add_argument("--no-pxe", action="store_true", help="don't start ProxyDHCP/TFTP (use your own DHCP/dnsmasq)")
+    ap.add_argument("--log", help="also write the log to this file")
+    ap.add_argument("--parent-pid", type=int, help=argparse.SUPPRESS)
     ap.add_argument("-v", "--verbose", action="store_true")
-    a = ap.parse_args()
-    logging.basicConfig(level=logging.DEBUG if a.verbose else logging.INFO,
+    a = ap.parse_args(argv)
+    handlers = []
+    if sys.stderr:
+        handlers.append(logging.StreamHandler())
+    if a.log:
+        Path(a.log).parent.mkdir(parents=True, exist_ok=True)
+        handlers.append(logging.FileHandler(a.log, encoding="utf-8"))
+    logging.basicConfig(level=logging.DEBUG if a.verbose else logging.INFO, handlers=handlers or [logging.NullHandler()],
                         format="%(asctime)s %(name)-8s %(message)s", datefmt="%H:%M:%S")
-    app = App(a.data)
+    if a.parent_pid:
+        watch_parent(a.parent_pid)
+    app = App(a.data, a.bootfiles)
     if a.ip:
         app.ip = a.ip
     if a.port:
@@ -686,9 +728,11 @@ def main():
     s = app.store.settings
     if not a.no_pxe:
         if s["proxy_dhcp"]:
-            pxe.ProxyDHCP(app.ip, app.choose_bootfile, app.on_pxe_seen).start()
+            app.services["dhcp"] = pxe.ProxyDHCP(app.ip, app.choose_bootfile, app.on_pxe_seen)
         if s["tftp"]:
-            pxe.TFTPServer(app.bootfiles).start()
+            app.services["tftp"] = pxe.TFTPServer(app.bootfiles)
+        for svc in app.services.values():
+            svc.start()
     pxe.Beacon(app.base).start()
     app.lib.scan()
     httpd = ThreadingHTTPServer(("", app.port), make_handler(app))

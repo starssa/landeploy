@@ -60,15 +60,16 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install build tools
-        run: python -m pip install pyinstaller pycdlib
+        run: python -m pip install pyinstaller pycdlib pillow
+      - name: Native window support (Windows/macOS)
+        if: runner.os != 'Linux'
+        run: python -m pip install pywebview
       - name: Build and smoke-test
         run: python build.py ${{ matrix.target }}
       - uses: actions/upload-artifact@v4
         with:
           name: landeploy-${{ matrix.target }}
-          path: |
-            dist/*.zip
-            dist/*.tar.gz
+          path: dist/release/*
           if-no-files-found: error
 
   release:
@@ -91,13 +92,15 @@ jobs:
           files: out/*
           generate_release_notes: true
           body: |
-            ## Downloads
-            | System | File |
-            |---|---|
-            | Windows 10/11 (64-bit) | `LANDeploy-*-windows-x64.zip` → unzip → double-click **Start LANDeploy.cmd** |
-            | Linux x64 (Ubuntu 24.04+, Debian 13+, Fedora 40+…) | `LANDeploy-*-linux-x64.tar.gz` → `tar xzf …` → `./start.sh` |
-            | Linux ARM64 (Raspberry Pi 5…) | `LANDeploy-*-linux-arm64.tar.gz` |
-            | macOS Apple Silicon (M1–M4) | `LANDeploy-*-macos-arm64.tar.gz` → `./start.sh` |
-            | macOS Intel | `LANDeploy-*-macos-x64.tar.gz` |
+            ## Downloads — pick one for your computer
 
-            Then open **http://localhost:8080**. No Python needed. See the README for client-PC setup.
+            | System | Install it | Portable (no install, data kept next to it) |
+            |---|---|---|
+            | **Windows 10/11** | `LANDeploy-*-windows-x64-setup.exe` | `LANDeploy-*-windows-x64-portable.zip` |
+            | **Ubuntu / Debian** (x64) | `landeploy_*_amd64.deb` | `LANDeploy-*-linux-x64.AppImage` |
+            | **Linux ARM64** (Raspberry Pi 5…) | `landeploy_*_arm64.deb` | `LANDeploy-*-linux-arm64.AppImage` |
+            | **Mac** (Apple Silicon M1–M4) | `LANDeploy-*-macos-arm64.dmg` | `LANDeploy-*-macos-arm64-portable.zip` |
+            | **Mac** (Intel) | `LANDeploy-*-macos-x64.dmg` | `LANDeploy-*-macos-x64-portable.zip` |
+
+            Start **LANDeploy** like any app. It asks for your administrator password once per start, which network boot needs; if you say no, software deployment still works.
+            No Python needed. The apps are not code-signed: Windows SmartScreen → *More info → Run anyway*; Mac → right-click the app → *Open*.

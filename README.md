@@ -8,15 +8,26 @@ Deploy operating systems (from plain ISO files) and software to many PCs on your
 
 ## Download
 
-Ready-to-run builds are on the **[Releases page](../../releases/latest)**. You don't need Python:
+Get the latest version from the **[Releases page](../../releases/latest)**. Every system has an **installable** and a **portable** version, and none of them needs Python:
 
-| System | File | Start |
+| System | Install it | Portable (no install) |
 |---|---|---|
-| Windows 10/11 | `LANDeploy-…-windows-x64.zip` | unzip → double-click **Start LANDeploy.cmd** |
-| Linux x64 / ARM64 | `LANDeploy-…-linux-x64.tar.gz` | `tar xzf LANDeploy-*.tar.gz && cd LANDeploy-* && ./start.sh` |
-| macOS (Apple Silicon / Intel) | `LANDeploy-…-macos-arm64.tar.gz` / `-macos-x64` | same as Linux; first run: `xattr -dr com.apple.quarantine .` |
+| Windows 10/11 | `LANDeploy-…-windows-x64-setup.exe` | `LANDeploy-…-windows-x64-portable.zip` → unzip → `LANDeploy.exe` |
+| Ubuntu / Debian | `landeploy_…_amd64.deb` (double-click, or `sudo apt install ./landeploy_*.deb`) | `LANDeploy-…-linux-x64.AppImage` (`chmod +x`, then double-click) |
+| Mac | `LANDeploy-…-macos-arm64.dmg` / `-x64.dmg` → drag to Applications | `LANDeploy-…-macos-*-portable.zip` |
 
-Then open http://localhost:8080. The start scripts ask for administrator/root rights because network boot uses ports 67, 69 and 4011.
+**Start LANDeploy** like any other app (Start menu, app grid or Launchpad). It:
+1. asks for your administrator password, because network boot needs ports 67/69/4011. If you decline, software deployment still works and network boot stays off.
+2. opens the console in its own window: native on Windows/macOS; on Linux a Chrome/Chromium/Edge app window if one is installed, otherwise your browser.
+3. stops the server when you close the window.
+
+**Where data goes** (ISOs, packages, settings):
+- installed: `C:\ProgramData\LANDeploy`, `/Library/Application Support/LANDeploy`, `/var/lib/landeploy`
+- portable: a `LANDeploy-data` folder next to the app, so the whole thing can live on a USB drive.
+
+**Headless / server use:** `LANDeploy --server` (or `landeploy --server` after installing the .deb) runs without a window, with the same options as `server.py`.
+
+The apps are not code-signed. On Windows, SmartScreen → *More info → Run anyway*. On Mac, right-click the app → *Open* the first time.
 
 Running from source instead needs only Python 3.8+. Optionally install 7-Zip or `pycdlib` to extract ISOs.
 
@@ -127,4 +138,4 @@ dhcp-boot=tag:!efi64,tag:!ipxe,undionly.kpxe,,SERVER
 - Everything is plain HTTP on the LAN. Don't expose port 8080 to the Internet.
 
 ## Files
-`server.py` web console + API + iPXE generation · `tools.py` tool downloads + agent setup scripts · `pxe.py` ProxyDHCP/TFTP/discovery/WoL · `library.py` ISO extraction, detection, boot scripts · `web/index.html` the GUI · `agent/landeploy_agent.py` client agent · `fetch_bootfiles.py` gets iPXE/wimboot · `build.py` + `.github/workflows/release.yml` build the releases · `data/` ISOs, extracted trees, packages, `state.json`.
+`desktop.py` desktop app (window, admin prompt, portable/installed data) · `server.py` web console + API + iPXE generation · `tools.py` tool downloads + agent setup scripts · `pxe.py` ProxyDHCP/TFTP/discovery/WoL · `library.py` ISO extraction, detection, boot scripts · `web/index.html` the GUI · `agent/landeploy_agent.py` client agent · `fetch_bootfiles.py` gets iPXE/wimboot · `build.py` + `.github/workflows/release.yml` build the releases · `data/` ISOs, extracted trees, packages, `state.json`.
