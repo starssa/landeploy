@@ -1,9 +1,14 @@
-# Push a tag like v1.0.0 to build LANDeploy for Linux, Windows and macOS
-# and publish them as a GitHub Release. Can also be run by hand from the Actions tab.
+# Builds LANDeploy for Linux, Windows and macOS and publishes a GitHub Release.
+# A release is made when:
+#   - VERSION in server.py changes on main and no tag v<VERSION> exists yet (tag is created for you), or
+#   - you push a tag like v1.2.0, or
+#   - you run it by hand from the Actions tab.
 name: Release
 
 on:
   push:
+    branches: [main]
+    paths: ["server.py", ".github/workflows/release.yml"]
     tags: ["v*"]
   workflow_dispatch:
 
@@ -11,8 +16,33 @@ permissions:
   contents: write
 
 jobs:
+  check:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      release: ${{ steps.v.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        name: Decide whether to release
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            v="${GITHUB_REF_NAME#v}"
+          else
+            v=$(python3 -c "import re;print(re.search(r'^VERSION = \"(.+)\"', open('server.py').read(), re.M).group(1))")
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_REF" == refs/tags/v* || "$GITHUB_EVENT_NAME" == workflow_dispatch ]] \
+             || [ -z "$(git ls-remote --tags origin "refs/tags/v$v")" ]; then
+            echo "release=true" >> "$GITHUB_OUTPUT"; echo "Releasing v$v"
+          else
+            echo "release=false" >> "$GITHUB_OUTPUT"; echo "v$v already released - bump VERSION in server.py to release again"
+          fi
+
   build:
     name: Build ${{ matrix.target }}
+    needs: check
+    if: needs.check.outputs.release == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -41,8 +71,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [check, build]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v4
@@ -53,6 +82,9 @@ jobs:
         run: cd out && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ needs.check.outputs.version }}
+          name: LANDeploy ${{ needs.check.outputs.version }}
+          target_commitish: ${{ github.sha }}
           files: out/*
           generate_release_notes: true
           body: |

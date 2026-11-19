@@ -22,9 +22,7 @@ Running from source instead needs only Python 3.8+. Optionally install 7-Zip or 
 
 ## Making a release (maintainers)
 
-```bash
-git tag v1.0.1 && git push origin v1.0.1
-```
+Change `VERSION = "1.0.1"` in `server.py`, commit and push to `main`. The tag `v1.0.1` is created for you; pushing a tag yourself also works.
 GitHub Actions (`.github/workflows/release.yml`) then builds Windows x64, Linux x64/ARM64 and macOS ARM64/x64 with PyInstaller, smoke-tests each build, and publishes them with SHA256 checksums as a GitHub Release. To build locally: `pip install pyinstaller pycdlib && python build.py`.
 
 ---
