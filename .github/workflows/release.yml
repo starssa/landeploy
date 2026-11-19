@@ -1,0 +1,68 @@
+# Push a tag like v1.0.0 to build LANDeploy for Linux, Windows and macOS
+# and publish them as a GitHub Release. Can also be run by hand from the Actions tab.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04,   target: linux-x64 }
+          - { os: ubuntu-24.04-arm, target: linux-arm64 }
+          - { os: windows-latest, target: windows-x64 }
+          - { os: macos-15,       target: macos-arm64 }
+          - { os: macos-15-intel, target: macos-x64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install build tools
+        run: python -m pip install pyinstaller pycdlib
+      - name: Build and smoke-test
+        run: python build.py ${{ matrix.target }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: landeploy-${{ matrix.target }}
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - name: Checksums
+        run: cd out && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: out/*
+          generate_release_notes: true
+          body: |
+            ## Downloads
+            | System | File |
+            |---|---|
+            | Windows 10/11 (64-bit) | `LANDeploy-*-windows-x64.zip` → unzip → double-click **Start LANDeploy.cmd** |
+            | Linux x64 (Ubuntu 24.04+, Debian 13+, Fedora 40+…) | `LANDeploy-*-linux-x64.tar.gz` → `tar xzf …` → `./start.sh` |
+            | Linux ARM64 (Raspberry Pi 5…) | `LANDeploy-*-linux-arm64.tar.gz` |
+            | macOS Apple Silicon (M1–M4) | `LANDeploy-*-macos-arm64.tar.gz` → `./start.sh` |
+            | macOS Intel | `LANDeploy-*-macos-x64.tar.gz` |
+
+            Then open **http://localhost:8080**. No Python needed. See the README for client-PC setup.
