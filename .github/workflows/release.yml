@@ -39,9 +39,40 @@ jobs:
             echo "release=false" >> "$GITHUB_OUTPUT"; echo "v$v already released - bump VERSION in server.py to release again"
           fi
 
+  agents:
+    name: Agent ${{ matrix.target }}
+    needs: check
+    if: needs.check.outputs.release == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest,   target: windows-x64 }
+          # Linux agents are built on Debian 11 (glibc 2.31) so they also run on older client PCs
+          - { os: ubuntu-24.04,     target: linux-x64,   container: "python:3.12-bullseye" }
+          - { os: ubuntu-24.04-arm, target: linux-arm64, container: "python:3.12-bullseye" }
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        if: runner.os == 'Windows'
+        with:
+          python-version: "3.12"
+      - name: Build agent
+        run: |
+          python -m pip install pyinstaller
+          python build.py agent ${{ matrix.target }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-${{ matrix.target }}
+          path: dist/agent/*
+          if-no-files-found: error
+
   build:
     name: Build ${{ matrix.target }}
-    needs: check
+    needs: [check, agents]
     if: needs.check.outputs.release == 'true'
     strategy:
       fail-fast: false
@@ -59,6 +90,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Get the client agents (bundled into the app)
+        uses: actions/download-artifact@v4
+        with:
+          pattern: agent-*
+          path: agent/bin
+          merge-multiple: true
       - name: Install build tools
         run: python -m pip install pyinstaller pycdlib pillow
       - name: Native window support (Windows/macOS)
@@ -73,7 +110,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: [check, build]
+    needs: [check, agents, build]
     # publish whatever built, even if one platform failed or was stuck in the queue
     if: ${{ !cancelled() && needs.check.outputs.release == 'true' }}
     runs-on: ubuntu-24.04
@@ -103,4 +140,4 @@ jobs:
             | **Mac** (Intel) | `LANDeploy-*-macos-x64.dmg` | `LANDeploy-*-macos-x64-portable.zip` |
 
             Start **LANDeploy** like any app. It asks for your administrator password once per start, which network boot needs; if you say no, software deployment still works.
-            No Python needed. The apps are not code-signed: Windows SmartScreen → *More info → Run anyway*; Mac → right-click the app → *Open*.
+            No Python needed, on the server or on client PCs: the `landeploy-agent-*` programs are included in the app and installed on client PCs from its **Agents & tools** page. The apps are not code-signed: Windows SmartScreen → *More info → Run anyway*; Mac → right-click the app → *Open*.

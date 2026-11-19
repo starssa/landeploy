@@ -26,14 +26,17 @@ import urllib.request
 import uuid
 from pathlib import Path
 
-VERSION = "1.0"
+VERSION = "1.2"
 IS_WIN = os.name == "nt"
 if IS_WIN:
-    STATE = Path(os.environ.get("PROGRAMDATA", "C:\\ProgramData")) / "LANDeploy" / "agent.json"
+    AGENT_DIR = Path(os.environ.get("PROGRAMDATA", "C:\\ProgramData")) / "LANDeploy-Agent"
+    STATE = AGENT_DIR / "agent.json"
+    OLD_STATE = AGENT_DIR.parent / "LANDeploy" / "agent.json"         # before 1.2: shared with the server app
 elif os.geteuid() == 0:
-    STATE = Path("/var/lib/landeploy/agent.json")
+    STATE = Path("/var/lib/landeploy-agent/agent.json")
+    OLD_STATE = Path("/var/lib/landeploy/agent.json")
 else:
-    STATE = Path.home() / ".landeploy" / "agent.json"
+    STATE = OLD_STATE = Path.home() / ".landeploy" / "agent.json"
 
 
 def discover(timeout=3):
@@ -238,7 +241,7 @@ def logged_on_user():
 
 def job_dir(jid):
     if IS_WIN:
-        d = Path(os.environ.get("PROGRAMDATA", "C:\\ProgramData")) / "LANDeploy" / "jobs" / jid
+        d = AGENT_DIR / "jobs" / jid
         d.mkdir(parents=True, exist_ok=True)
         return d
     d = Path(tempfile.mkdtemp(prefix=f"landeploy-{jid}-"))
@@ -347,7 +350,8 @@ def main():
     ap.add_argument("--once", action="store_true", help="check once and exit")
     a = ap.parse_args()
 
-    state = json.loads(STATE.read_text()) if STATE.exists() else {}
+    src = STATE if STATE.exists() else OLD_STATE      # keep the same identity after moving folders
+    state = json.loads(src.read_text()) if src.exists() else {}
     server = a.server or state.get("server")
     while not server:
         server = discover()

@@ -34,7 +34,7 @@ Running from source instead needs only Python 3.8+. Optionally install 7-Zip or 
 ## Making a release (maintainers)
 
 Change `VERSION = "1.0.1"` in `server.py`, commit and push to `main`. The tag `v1.0.1` is created for you; pushing a tag yourself also works.
-GitHub Actions (`.github/workflows/release.yml`) then builds Windows x64, Linux x64/ARM64 and macOS ARM64/x64 with PyInstaller, smoke-tests each build, and publishes them with SHA256 checksums as a GitHub Release. To build locally: `pip install pyinstaller pycdlib && python build.py`.
+GitHub Actions (`.github/workflows/release.yml`) then compiles the client agents, bundles them into the desktop app for Windows x64, Linux x64/ARM64 and macOS ARM64/x64 (PyInstaller), smoke-tests each build, and publishes them with SHA256 checksums as a GitHub Release. To build locally: `pip install pyinstaller pycdlib && python build.py`.
 
 ---
 
@@ -106,15 +106,14 @@ Secure Boot: the stock iPXE binaries aren't Microsoft-signed, so turn Secure Boo
 4. **Software**: New package → upload an `.msi/.exe/.ps1/.deb/.rpm/.sh` with silent switches (presets included), *or* enter a command like `winget install -e --id 7zip.7zip --silent` / `apt-get install -y vlc`. Then **Deploy…** to any number of agents, or use *Install software on selected* from Computers. Status for each PC shows up live: pending → asking → running → success / failed / denied.
 
 ### Installing the agent (console → **Agents & tools**)
-1. Click **⬇ Download** next to *iPXE boot files* and *Python for Windows (agent runtime)*. The server keeps them, so client PCs never need Internet access. If the server is offline, upload the files instead.
-2. On each **Windows** PC, download **LANDeploy-Agent-Setup.cmd** from the console and choose *Run as administrator*, or paste the one-line command (with a 📋 Copy button) into an admin PowerShell. Portable Python and the agent go into `C:\ProgramData\LANDeploy`, and a SYSTEM scheduled task starts the agent at every boot.
-3. On each **Linux** PC, paste `wget -qO- "http://SERVER:8080/setup.sh?t=TOKEN" | sudo sh`. This installs a systemd service plus zenity.
+Client PCs need **no Python and no Internet**. LANDeploy includes the agent as a small standalone program for Windows x64, Linux x64 and Linux ARM64, and hands it out over the LAN:
 
-The setup URLs only work with the agent token, which the console fills in for you. The **command generator** on the same page builds winget/apt/snap/flatpak commands and silent switches, and can turn them into a package in one click.
+- **Windows PCs**: download **LANDeploy-Agent-Setup.cmd** from the console and choose *Run as administrator*, or paste the one-line command (📋 Copy button) into an admin PowerShell. The agent goes into `C:\ProgramData\LANDeploy-Agent` and a SYSTEM scheduled task starts it at every boot.
+- **Linux PCs**: paste `wget -qO- "http://SERVER:8080/setup.sh?t=TOKEN" | sudo sh`. The agent goes into `/opt/landeploy-agent` and runs as the `landeploy-agent` systemd service; zenity is installed for the consent prompt.
 
-To fetch Python from a local mirror instead of python.org, start the server with `LANDEPLOY_PYTHON_MIRROR=http://mirror/python/`.
+The setup URLs only work with the agent token, which the console fills in for you. The **command generator** on the same page builds winget/apt/snap/flatpak commands and silent switches, and can turn them into a package in one click. Re-running the setup updates an existing agent, including the older Python-based one.
 
-If nobody answers the consent dialog within 5 minutes, the install is **denied**. Packages marked *silent* skip the dialog.
+The agent programs are also attached to each release (`landeploy-agent-*`). Running LANDeploy from source? Build the agent for your OS with `pip install pyinstaller && python build.py agent`.
 
 ---
 

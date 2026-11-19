@@ -26,7 +26,7 @@ import library
 import tools
 import pxe
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 # RES: bundled read-only files (web/, agent/). HOME: where data/ and bootfiles/ live.
 # When packaged with PyInstaller, RES is the unpack folder and HOME is the folder of the executable.
 FROZEN = getattr(sys, "frozen", False)
@@ -177,7 +177,7 @@ class App:
         self.bootfiles.mkdir(parents=True, exist_ok=True)
         self.lib = Library(self.store)
         self.services = {}          # "dhcp"/"tftp" -> service object with .ok once its port is bound
-        self.tools = tools.Tools(self.store.dir / "tools", self.bootfiles)
+        self.tools = tools.Tools(self.store.dir / "tools", self.bootfiles, [RES / "agent" / "bin"])
 
     # ------------------------------------------------ PXE hooks
     def choose_bootfile(self, mac, arch, is_ipxe):
@@ -404,6 +404,9 @@ def make_handler(app):
                 return
             if p == "/agent/landeploy_agent.py":
                 return self.send_file(ROOT / "agent" / "landeploy_agent.py")
+            m = re.fullmatch(r"/agent/bin/([\w.\-]+)", p)             # compiled agents for client PCs
+            if m:
+                return self.send_file(app.tools.agent_file(m.group(1)), download=True)
             m = re.fullmatch(r"/tools/([\w.\-]+)", p)
             if m:
                 return self.send_file(app.tools.dir / m.group(1),
@@ -464,10 +467,6 @@ def make_handler(app):
                 name = Path(q.get("name", "upload.bin")).name
                 if q.get("kind") == "iso":
                     dest = st.dir / "isos" / name
-                elif q.get("kind") == "tool":
-                    if name not in tools.UPLOADABLE:
-                        return self.send(400, {"error": "unknown tool file"})
-                    dest = app.tools.dir / name
                 else:
                     pk = st.d["packages"].get(q.get("id", ""))
                     if not pk:
@@ -493,15 +492,12 @@ def make_handler(app):
                 tmp.replace(dest)
                 if q.get("kind") == "iso":
                     app.lib.scan()
-                elif q.get("kind") == "tool":
-                    key = [k for k, (n, _) in tools.PYTHON_FILES.items() if n == name][0]
-                    app.tools.set_meta(key, "uploaded")
                 else:
                     pk.update(file=name, sha256=h.hexdigest(), size=dest.stat().st_size)
                     st.save()
                 st.event(f"Uploaded {name}")
                 return self.send(body={"ok": True})
-            if p == "/api/tools/fetch":                    # {what: bootfiles|python-embed|python-installer}
+            if p == "/api/tools/fetch":                    # {what: "bootfiles"}
                 app.tools.fetch(self.body_json().get("what"))
                 return self.send(body={"ok": True})
             if p == "/api/library/scan":

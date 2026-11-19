@@ -11,6 +11,12 @@ and an installable form:
 
     pip install pyinstaller pycdlib pywebview      (pywebview: Windows/macOS only)
     python build.py linux-x64
+
+The client agent is compiled separately into a standalone program (no Python on client PCs):
+
+    python build.py agent linux-x64     -> dist/agent/landeploy-agent-linux-x64 (also copied to agent/bin/)
+
+Programs found in agent/bin/ are bundled into the desktop app, which hands them out to client PCs.
 """
 import json
 import os
@@ -222,12 +228,38 @@ def package_mac(app, ver, target):
     return [port, dmg]
 
 
+def build_agent(target):
+    name = f"landeploy-agent-{target}"
+    out = DIST / "agent"
+    cmd = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onefile", "--name", name,
+           "--distpath", out, "--workpath", BUILD / "agent", "--specpath", BUILD]
+    if IS_WIN:
+        cmd += ["--noconsole", "--icon", HERE / "assets" / "icon.ico"]
+    run(cmd + [HERE / "agent" / "landeploy_agent.py"], cwd=HERE)
+    exe = out / (name + (".exe" if IS_WIN else ""))
+    # smoke test: one poll against a server that isn't there must exit cleanly
+    r = subprocess.run([str(exe), "--server", "http://127.0.0.1:9", "--token", "x", "--once"], timeout=120)
+    if r.returncode != 0:
+        raise SystemExit(f"agent smoke test failed (exit {r.returncode})")
+    print(f"agent OK: {exe.name} ({exe.stat().st_size >> 20} MB)")
+    bin_dir = HERE / "agent" / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    shutil.copy(exe, bin_dir / exe.name)
+
+
 def main():
+    if sys.argv[1:2] == ["agent"]:
+        target = sys.argv[2] if len(sys.argv) > 2 else ("windows-x64" if IS_WIN else f"linux-{'arm64' if platform.machine().lower() in ('aarch64', 'arm64') else 'x64'}")
+        DIST.mkdir(exist_ok=True)
+        BUILD.mkdir(exist_ok=True)
+        return build_agent(target)
     target = sys.argv[1] if len(sys.argv) > 1 else f"{sys.platform}-{platform.machine().lower()}"
     ver = version()
     shutil.rmtree(DIST, ignore_errors=True)
     shutil.rmtree(BUILD, ignore_errors=True)
     BUILD.mkdir()
+    bundled = sorted(p.name for p in (HERE / "agent" / "bin").glob("landeploy-agent-*")) if (HERE / "agent" / "bin").is_dir() else []
+    print("bundling client agents:", bundled or "NONE (client setup will not work)")
     bundle, exe = pyinstaller()
     smoke_test(exe)
     if IS_WIN:

@@ -195,40 +195,34 @@ function tools(){
   const winOne = `powershell -NoProfile -ExecutionPolicy Bypass -Command "irm '${b}/setup.ps1?t=${tok}' | iex"`;
   const linOne = `wget -qO- "${b}/setup.sh?t=${tok}" | sudo sh`;
   const g = genCommand();
-  return `<h1>Agents &amp; tools</h1><p class="sub">Everything the server and the client PCs need, downloaded once to this server and handed out over the LAN, so client PCs don't need Internet access.</p>
+  return `<h1>Agents &amp; tools</h1><p class="sub">Everything the client PCs need is handed out by this server over the LAN, so client PCs need neither Python nor Internet access.</p>
 
   <h2>1 · Server tools</h2>
   <div class="card">
     ${row('bootfiles','🥾','iPXE network boot files','undionly.kpxe (BIOS), snponly.efi / ipxe.efi (UEFI), wimboot (Windows). Required for OS deployment.'+(T.bootfiles.missing.length?` Missing: <span class="mono">${T.bootfiles.missing.join(', ')}</span>`:''))}
-    ${row('python-embed','🐍','Python for Windows (agent runtime)','Portable Python (~10 MB). The Windows agent installer unpacks it automatically, so nothing to do on the PCs.',
-      T['python-embed'].present?`<a class="btn" href="${b}/tools/python-embed-amd64.zip">Save</a>`:'' )}
-    ${row('python-installer','💿','Python for Windows (full offline installer)','Optional: the regular python.org setup .exe, if you want a full Python on some PCs.',
-      T['python-installer'].present?`<a class="btn" href="${b}/tools/python-installer-amd64.exe">Save</a>`:'' )}
-    <p class="muted" style="margin:10px 0 0">Server has no Internet? Download those files on another PC and upload them here:
-      <a href="#" data-act="uptool" data-name="python-embed-amd64.zip">upload embeddable zip</a> ·
-      <a href="#" data-act="uptool" data-name="python-installer-amd64.exe">upload installer .exe</a></p>
+    ${agentsRow(T.agents, b)}
   </div>
 
   <h2>2 · Install the agent on client PCs</h2>
   <div class="card">
     <div class="tabs"><button data-ostab="win" class="${osTab==='win'?'on':''}">🪟 Windows</button><button data-ostab="lin" class="${osTab==='lin'?'on':''}">🐧 Linux</button></div>
     ${osTab==='win' ? `
-      ${T['python-embed'].present?'':'<p><span class="pill warn">First click ⬇ Download next to "Python for Windows (agent runtime)" above.</span></p>'}
+      ${T.agents['windows-x64'].present?'':'<p><span class="pill warn">This server has no Windows agent program (it comes with the release builds of LANDeploy).</span></p>'}
       <b>Option A: download and double-click</b> <span class="muted">(easiest with a USB stick or a browser on the PC)</span>
       <div class="row" style="margin:8px 0 14px"><a class="btn p" href="${b}/setup.cmd?t=${tok}">⬇ LANDeploy-Agent-Setup.cmd</a><span class="muted">On the PC: right-click → <b>Run as administrator</b>.</span></div>
       <b>Option B: paste one line</b> <span class="muted">in an <b>administrator</b> PowerShell or Command Prompt on the PC</span>
       ${cmdBox(winOne)}
-      <p class="muted">Installs portable Python and the agent into <span class="mono">C:\\ProgramData\\LANDeploy</span> and starts it in the background at every boot (scheduled task "LANDeploy", runs as SYSTEM). Users see the "Allow installation?" prompt on their desktop, even without admin rights.</p>
+      <p class="muted">Copies the agent program (no Python needed) into <span class="mono">C:\\ProgramData\\LANDeploy-Agent</span> and starts it in the background at every boot (scheduled task "LANDeploy", runs as SYSTEM). Users see the "Allow installation?" prompt on their desktop, even without admin rights.</p>
       <details><summary class="muted">Uninstall / troubleshoot</summary>
-        ${cmdBox('schtasks /end /tn LANDeploy & schtasks /delete /tn LANDeploy /f & rmdir /s /q %ProgramData%\\LANDeploy','Copy uninstall')}
-        ${cmdBox(`curl.exe -I ${b}/agent/landeploy_agent.py`,'Copy connection test')}</details>`
+        ${cmdBox('schtasks /end /tn LANDeploy & schtasks /delete /tn LANDeploy /f & rmdir /s /q %ProgramData%\\LANDeploy-Agent','Copy uninstall')}
+        ${cmdBox(`curl.exe -I ${b}/agent/bin/landeploy-agent-windows-x64.exe`,'Copy connection test')}</details>`
     : `
       <b>Paste one line</b> in a terminal on the PC (Ubuntu, Debian, Fedora, Arch…)
       ${cmdBox(linOne)}
       <div class="row" style="margin:6px 0"><a class="btn" href="${b}/setup.sh?t=${tok}">⬇ setup.sh</a><span class="muted">or download it and run <span class="mono">sudo sh setup.sh</span></span></div>
-      <p class="muted">Installs the agent as a systemd service (<span class="mono">landeploy-agent</span>) plus zenity for the consent prompt.</p>
+      <p class="muted">Copies the agent program (no Python needed) to <span class="mono">/opt/landeploy-agent</span> and runs it as a systemd service, plus zenity for the consent prompt.</p>
       <details><summary class="muted">Uninstall / status</summary>
-        ${cmdBox('sudo systemctl disable --now landeploy-agent && sudo rm -rf /opt/landeploy /var/lib/landeploy /etc/systemd/system/landeploy-agent.service','Copy uninstall')}
+        ${cmdBox('sudo systemctl disable --now landeploy-agent && sudo rm -rf /opt/landeploy-agent /var/lib/landeploy-agent /etc/systemd/system/landeploy-agent.service','Copy uninstall')}
         ${cmdBox('systemctl status landeploy-agent','Copy status')}</details>`}
     <p class="muted" style="margin-bottom:0">Agent token: <span class="mono">${esc(tok)}</span> (already included in the commands above; change it in Settings).</p>
   </div>
@@ -246,6 +240,17 @@ function tools(){
     <label>Command</label>${g ? cmdBox(g) : '<div class="muted">Type an ID above.</div>'}
     ${g && GEN.type!=='switch' ? `<div class="row"><button class="btn p" data-act="genpkg">📦 Create package from this command</button></div>`:''}
   </div>`;
+}
+function agentsRow(A, b){
+  const names = {'windows-x64':'Windows 10/11', 'linux-x64':'Linux x64', 'linux-arm64':'Linux ARM64'};
+  const all = Object.values(A).every(x=>x.present);
+  return `<div class="tool"><div class="ic">🤖</div><div class="sp"><b>Agent programs for client PCs</b> <span class="muted">— standalone, no Python needed</span>
+    <div class="muted">Included with LANDeploy; the setup commands below install them on the PCs.</div>
+    <div class="row" style="margin-top:6px">${Object.entries(A).map(([k,x]) => x.present
+      ? `<a class="pill ok" style="text-decoration:none" href="${b}/agent/bin/${x.file}">✓ ${names[k]} · ${size(x.size)}</a>`
+      : `<span class="pill">✗ ${names[k]}</span>`).join(' ')}</div>
+    ${all?'':'<div class="muted" style="margin-top:6px">Missing programs come with the <a target="_blank" href="https://github.com/starssa/landeploy/releases/latest">release builds</a>. Running from source? Build one with <span class="mono">python build.py agent</span>.</div>'}
+  </div></div>`;
 }
 function genCommand(){
   const id = (GEN.id||'').trim(); if(!id) return '';
@@ -418,8 +423,6 @@ function bind(){
       case 'bulkwol': { const macs = selMacs(); for(const m of macs) await api('/api/wol',{mac:m}); return toast(`Wake-on-LAN sent to ${macs.length} PC(s)`); }
       case 'bulkclear': SEL.clear(); return render();
       case 'fetchtool': await api('/api/tools/fetch',{what:d.what}); toast('Downloading on the server…'); return load();
-      case 'uptool': { const inp = document.createElement('input'); inp.type='file'; inp.onchange = async () => { const f = inp.files[0]; if(!f) return;
-          toast('Uploading '+f.name); try{ await upload(`/api/upload?kind=tool&name=${d.name}`, f); toast('Uploaded'); }catch(e){ toast(e.message); } load(); }; inp.click(); return; }
       case 'genpkg': { const cmd = genCommand(), id = GEN.id.trim();
           const r = await api('/api/packages',{name:id, os:GEN.type==='winget'?'windows':'linux', command:cmd, args:'', consent:true, run_as:GEN.type==='winget'&&GEN.peruser?'user':'system'});
           toast('Package created'); await load(); return pkgDialog(r.id); }
@@ -437,15 +440,6 @@ function bind(){
       case 'clearlog': await api('/api/events/clear',{}); return load();
       case 'smb': { const t = await (await fetch('/api/smbconf')).text(); return dlg(`<h3>SMB share for Windows installs</h3><p class="muted">WinPE maps this share and runs setup.exe from it.</p><pre>${esc(t)}</pre><div class="foot"><button class="btn p" onclick="closeDlg()">OK</button></div>`); }
       case 'agenthelp': return document.querySelector('nav [data-v=tools]').click();
-      case 'agenthelp_old': return dlg(`<h3>Install the agent on a PC</h3><p class="muted">Needs Python 3 (or build an .exe with PyInstaller). Run as administrator/root.</p>
-        <pre># download
-curl -O ${esc(S.server.base)}/agent/landeploy_agent.py
-# run (auto-discovers this server on the LAN)
-python3 landeploy_agent.py --token ${esc(S.settings.agent_token)}
-
-# Windows, start at every logon with admin rights:
-schtasks /create /tn LANDeploy /sc onlogon /rl highest /tr "pythonw C:\\LANDeploy\\landeploy_agent.py --token ${esc(S.settings.agent_token)}"</pre>
-        <div class="foot"><button class="btn p" onclick="closeDlg()">OK</button></div>`);
       case 'saveset': { const b={}; ['server_ip','http_port','default_action','menu_timeout','auto_delay','confirm_timeout','smb_share','smb_user','smb_pass','agent_token','admin_password'].forEach(k=>b[k]=$('#s_'+k).value);
         ['http_port','menu_timeout','auto_delay','confirm_timeout'].forEach(k=>b[k]=parseInt(b[k])||0); b.proxy_dhcp=$('#s_proxy_dhcp').checked; b.tftp=$('#s_tftp').checked;
         await api('/api/settings', b); toast('Saved'); return load(); }
