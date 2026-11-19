@@ -26,7 +26,7 @@ import library
 import tools
 import pxe
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 # RES: bundled read-only files (web/, agent/). HOME: where data/ and bootfiles/ live.
 # When packaged with PyInstaller, RES is the unpack folder and HOME is the folder of the executable.
 FROZEN = getattr(sys, "frozen", False)
@@ -39,6 +39,7 @@ DEFAULT_SETTINGS = {
     "server_ip": "", "http_port": 8080, "proxy_dhcp": True, "tftp": True,
     "default_action": "menu",      # unknown machines: "menu" (show menu) or "local" (boot disk silently)
     "menu_timeout": 15, "auto_delay": 8, "confirm_timeout": 60,
+    "iso_mode": "mount",           # new ISOs: "mount" (no copy, needs admin) or "extract" (copy the files)
     "smb_share": "landeploy", "smb_user": "", "smb_pass": "",
     "agent_token": "", "admin_password": "",
 }
@@ -70,7 +71,7 @@ class Store:
 
     def __init__(self, data_dir):
         self.dir = Path(data_dir)
-        for sub in ("isos", "library", "packages"):
+        for sub in ("isos", "library", "mnt", "unattend", "packages"):
             (self.dir / sub).mkdir(parents=True, exist_ok=True)
         self.file = self.dir / "state.json"
         self.lock = threading.RLock()
@@ -113,34 +114,60 @@ class Store:
 
 # ====================================================================== ISO worker
 class Library:
+    """Prepares ISOs in one of two ways:
+       extract: copy the files to data/library/<id>   (works everywhere, uses disk space)
+       mount:   mount the ISO read-only at data/mnt/<id> (no copy; needs admin rights)"""
+
     def __init__(self, store):
         self.store = store
         self.q, self.cv = [], threading.Condition()
-        threading.Thread(target=self._worker, daemon=True, name="extract").start()
+        threading.Thread(target=self._worker, daemon=True, name="prepare").start()
+
+    def root(self, e):
+        """Folder holding the ISO's files for this entry."""
+        sub = "mnt" if e.get("mode") == "mount" else "library"
+        return self.store.dir / sub / e["id"]
 
     def scan(self):
-        """Register every *.iso in data/isos that isn't in the library yet, and queue extraction."""
-        added = []
+        """Register new *.iso files, re-prepare ISOs that changed on disk, and restore mounts after a restart."""
+        todo = []
         with self.store.lock:
-            known = {e["iso"] for e in self.store.d["library"].values()}
+            L = self.store.d["library"]
+            by_iso = {e["iso"]: e for e in L.values()}
             for iso in sorted((self.store.dir / "isos").glob("*.[iI][sS][oO]")):
-                if iso.name in known:
-                    continue
-                eid = uuid.uuid4().hex[:8]
-                self.store.d["library"][eid] = {
-                    "id": eid, "iso": iso.name, "name": iso.stem.replace("_", " "), "status": "queued",
-                    "size": iso.stat().st_size, "boot": {}, "enabled": True, "extra_args": "",
-                    "unattend": "", "autoinstall": "", "kickstart": "", "added": now()}
-                added.append(eid)
+                st = iso.stat()
+                e = by_iso.get(iso.name)
+                if not e:
+                    eid = uuid.uuid4().hex[:8]
+                    L[eid] = {"id": eid, "iso": iso.name, "name": iso.stem.replace("_", " "), "status": "queued",
+                              "size": st.st_size, "boot": {}, "enabled": True, "extra_args": "",
+                              "mode": self.store.settings.get("iso_mode", "extract"),
+                              "unattend": "", "autoinstall": "", "kickstart": "", "added": now()}
+                    todo.append(eid)
+                elif e.get("mtime") and int(st.st_mtime) != e["mtime"]:
+                    e.update(size=st.st_size, status="queued")  # the ISO was replaced (e.g. a new custom build)
+                    todo.append(e["id"])
+                elif e.get("mode") == "mount" and e.get("status") == "ready" and not library.is_mounted(self.root(e)):
+                    e["status"] = "queued"                      # server restarted: mount again
+                    todo.append(e["id"])
             self.store.save()
-        for eid in added:
+        for eid in todo:
             self.prepare(eid)
-        return added
+        return todo
 
     def prepare(self, eid):
         with self.cv:
-            self.q.append(eid)
+            if eid not in self.q:
+                self.q.append(eid)
             self.cv.notify()
+
+    def release(self, e, keep=None):
+        """Undo how an entry was prepared (unmount and/or delete the extracted copy)."""
+        iso = self.store.dir / "isos" / e["iso"]
+        if keep != "mount":
+            library.unmount_iso(iso, self.store.dir / "mnt" / e["id"])
+        if keep != "extract":
+            shutil.rmtree(self.store.dir / "library" / e["id"], ignore_errors=True)
 
     def _worker(self):
         while True:
@@ -151,14 +178,30 @@ class Library:
             e = self.store.d["library"].get(eid)
             if not e:
                 continue
-            e["status"] = "extracting"
+            iso = self.store.dir / "isos" / e["iso"]
+            mode = e.get("mode") or "extract"
+            if not iso.is_file():
+                e["status"] = "error: ISO file missing"
+                self.store.save()
+                continue
+            e["status"] = "mounting" if mode == "mount" else "extracting"
             self.store.save()
-            dest = self.store.dir / "library" / eid
+            note = ""
             try:
-                tool = library.extract_iso(self.store.dir / "isos" / e["iso"], dest)
-                e["boot"] = library.detect(dest)
+                if mode == "mount":
+                    try:
+                        self.release(e)
+                        tool = library.mount_iso(iso, self.root(e))
+                    except Exception as ex:                    # e.g. no admin rights: copy the files instead
+                        note = f" (mounting failed: {str(ex)[:120]}, extracted instead)"
+                        e["mode"] = mode = "extract"
+                if mode == "extract":
+                    self.release(e, keep="extract")
+                    tool = library.extract_iso(iso, self.root(e))
+                e["boot"] = library.detect(self.root(e))
+                e["mtime"] = int(iso.stat().st_mtime)
                 e["status"] = "ready"
-                self.store.event(f"Prepared {e['iso']} with {tool}: {library.TYPE_LABELS[e['boot']['type']]}")
+                self.store.event(f"Prepared {e['iso']} ({tool}): {library.TYPE_LABELS[e['boot']['type']]}{note}")
             except Exception as ex:
                 e["status"] = f"error: {ex}"
                 self.store.event(f"Failed to prepare {e['iso']}: {ex}")
@@ -254,7 +297,7 @@ class App:
                 st.machine(mac, state="installing", last_deploy=e["name"], last_deploy_at=now())
         st.event(f"{mac or 'A PC'} started installing {e['name']}")
         if e["boot"].get("type") == "windows" and e.get("unattend"):
-            (st.dir / "library" / eid / "landeploy-unattend.xml").write_text(e["unattend"])
+            (st.dir / "unattend" / f"{eid}.xml").write_text(e["unattend"])     # mounted ISOs are read-only
         return library.boot_script(e, self.base, mac)
 
 
@@ -373,7 +416,8 @@ def make_handler(app):
                 return self.send(200 if s else 404, s or "#!ipxe\necho entry not ready\nprompt\n", ctype=ipxe)
             m = re.fullmatch(r"/files/(\w+)/(.+)", p)
             if m:
-                return self.send_file(library.find_ci(st.dir / "library" / m.group(1), m.group(2)))
+                e = st.d["library"].get(m.group(1))
+                return self.send_file(library.find_ci(app.lib.root(e), m.group(2)) if e else None)
             m = re.fullmatch(r"/isos/([^/]+)", p)
             if m:
                 return self.send_file(st.dir / "isos" / Path(m.group(1)).name)
@@ -510,13 +554,16 @@ def make_handler(app):
                     for k in ("name", "enabled", "extra_args", "unattend", "autoinstall", "kickstart"):
                         if k in b:
                             e[k] = b[k]
+                    if b.get("mode") in ("mount", "extract") and b["mode"] != e.get("mode", "extract"):
+                        e["mode"], e["status"] = b["mode"], "queued"
+                        app.lib.prepare(eid)                   # switch between mounted and extracted
                     st.save()
                 elif act == "prepare":
                     e["status"] = "queued"
                     app.lib.prepare(eid)
                 else:
                     L.pop(eid)
-                    shutil.rmtree(st.dir / "library" / eid, ignore_errors=True)
+                    app.lib.release(e)
                     if self.body_json().get("delete_iso"):
                         (st.dir / "isos" / e["iso"]).unlink(missing_ok=True)
                     st.save()

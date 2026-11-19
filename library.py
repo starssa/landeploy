@@ -1,7 +1,9 @@
 """OS library: extract ISOs, detect what they are, and write the iPXE script
 that boots each one over HTTP."""
 import logging
+import os
 import re
+import sys
 import shutil
 import subprocess
 from pathlib import Path
@@ -97,6 +99,73 @@ def _extract_pycdlib(iso, dest):
     return "pycdlib"
 
 
+# ---------------------------------------------------------------- mounting (no copy)
+def mount_iso(iso, mnt):
+    """Mount an ISO read-only at folder mnt instead of extracting it. Needs admin/root.
+    Windows: virtual drive + a junction at mnt.  macOS: hdiutil.  Linux: loop mount
+    (UDF first: Windows ISOs keep their files in UDF, the ISO9660 part only has a README)."""
+    iso, mnt = Path(iso).resolve(), Path(mnt)
+    unmount_iso(iso, mnt)
+    mnt.parent.mkdir(parents=True, exist_ok=True)
+    if os.name == "nt":
+        ps = (f"$i = Mount-DiskImage -ImagePath '{iso}' -StorageType ISO -Access ReadOnly -PassThru; "
+              "($i | Get-Volume).DriveLetter")
+        r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], capture_output=True, text=True)
+        letter = r.stdout.strip()[-1:]
+        if r.returncode or not letter.isalpha():
+            raise RuntimeError("Mount-DiskImage failed: " + (r.stderr.strip() or r.stdout.strip())[-300:])
+        r = subprocess.run(["cmd", "/c", "mklink", "/J", str(mnt), f"{letter}:\\"], capture_output=True, text=True)
+        if r.returncode:
+            raise RuntimeError("could not link the virtual drive: " + r.stdout.strip() + r.stderr.strip())
+        return f"virtual drive {letter}:"
+    mnt.mkdir(exist_ok=True)
+    if sys.platform == "darwin":
+        r = subprocess.run(["hdiutil", "attach", "-nobrowse", "-readonly", "-mountpoint", str(mnt), str(iso)],
+                           capture_output=True, text=True)
+        if r.returncode:
+            raise RuntimeError("hdiutil: " + r.stderr.strip()[-300:])
+        return "hdiutil"
+    errors = []
+    for fs in ("udf", "iso9660"):
+        r = subprocess.run(["mount", "-t", fs, "-o", "loop,ro", str(iso), str(mnt)], capture_output=True, text=True)
+        if r.returncode == 0:
+            return f"loop mount ({fs})"
+        errors.append(f"{fs}: {r.stderr.strip()}")
+    raise RuntimeError("; ".join(errors)[-400:])
+
+
+def unmount_iso(iso, mnt):
+    mnt = Path(mnt)
+    if os.name == "nt":
+        if os.path.lexists(mnt):
+            try:
+                os.rmdir(mnt)                                  # removes the junction only, never the files
+            except OSError:
+                pass
+        subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                        f"Dismount-DiskImage -ImagePath '{Path(iso).resolve()}' -ErrorAction SilentlyContinue | Out-Null"],
+                       capture_output=True)
+        return
+    if is_mounted(mnt):
+        cmd = ["hdiutil", "detach", "-force", str(mnt)] if sys.platform == "darwin" else ["umount", str(mnt)]
+        if subprocess.run(cmd, capture_output=True).returncode and sys.platform != "darwin":
+            subprocess.run(["umount", "-l", str(mnt)], capture_output=True)   # busy (a PC is downloading): lazy
+    try:
+        mnt.rmdir()
+    except OSError:
+        pass
+
+
+def is_mounted(mnt):
+    mnt = Path(mnt)
+    if os.name == "nt":
+        try:
+            return os.path.lexists(mnt) and any(mnt.iterdir())
+        except OSError:
+            return False
+    return os.path.ismount(mnt)
+
+
 # ---------------------------------------------------------------- detection
 def detect(root):
     """Return boot info for an extracted ISO tree."""
@@ -171,7 +240,8 @@ def boot_script(entry, base, mac):
 def winpe_files(entry, settings, server_ip):
     share = settings.get("smb_share", "landeploy")
     user, pw = settings.get("smb_user") or "guest", settings.get("smb_pass") or ""
-    unattend = f" /unattend:Z:\\library\\{entry['id']}\\landeploy-unattend.xml" if entry.get("unattend") else ""
+    unattend = f" /unattend:Z:\\unattend\\{entry['id']}.xml" if entry.get("unattend") else ""
+    folder = "mnt" if entry.get("mode") == "mount" else "library"     # mounted ISO or extracted copy
     winpeshl = '[LaunchApps]\r\n"install.cmd"\r\n'
     cmd = ("@echo off\r\n"
            "title LANDeploy - Windows network install\r\n"
@@ -179,7 +249,7 @@ def winpe_files(entry, settings, server_ip):
            "echo Waiting for network...\r\n"
            f":retry\r\nping -n 3 {server_ip} >nul || goto retry\r\n"
            f"net use Z: \\\\{server_ip}\\{share} /user:{user} \"{pw}\" || (echo SMB share not reachable & pause & goto retry)\r\n"
-           f"Z:\\library\\{entry['id']}\\setup.exe{unattend}\r\n"
+           f"Z:\\{folder}\\{entry['id']}\\setup.exe{unattend}\r\n"
            "wpeutil reboot\r\n")
     return winpeshl, cmd
 

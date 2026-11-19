@@ -100,7 +100,8 @@ Secure Boot: the stock iPXE binaries aren't Microsoft-signed, so turn Secure Boo
 
 ## Using it
 
-1. **OS library**: drop ISOs. Each one is extracted and its type is detected automatically. Use **Options** to rename it, add kernel arguments, or paste an *unattended answer file* (autounattend.xml / Ubuntu autoinstall / kickstart). Templates are included, and they keep disk selection interactive on purpose.
+1. **OS library**: drop ISOs, official or custom (Tiny11, your own drivers or apps…). By default each ISO is **mounted**: LANDeploy reads it in place, with no copy and no extra disk space. Replace the `.iso` file, click **Rescan**, and the new version is used. Mounting needs admin rights. Without them, or if you choose **Extracting** at the top of the page, the files are copied instead. Each ISO can be switched in **Options → Storage**. After a restart, mounted ISOs are mounted again automatically.
+    Each one is extracted and its type is detected automatically. Use **Options** to rename it, add kernel arguments, or paste an *unattended answer file* (autounattend.xml / Ubuntu autoinstall / kickstart). Templates are included, and they keep disk selection interactive on purpose.
 2. **Computers**: PCs appear after their first network boot, or when the agent registers. You can also add PCs by MAC address.
 3. **Deploy OS…**: tick **one or many** PCs → choose OS → *Ask on screen* (safe) or *Start automatically* (+ Wake-on-LAN) → Schedule. Then power on or network-boot them. They all install in parallel.
 4. **Software**: New package → upload an `.msi/.exe/.ps1/.deb/.rpm/.sh` with silent switches (presets included), *or* enter a command like `winget install -e --id 7zip.7zip --silent` / `apt-get install -y vlc`. Then **Deploy…** to any number of agents, or use *Install software on selected* from Computers. Status for each PC shows up live: pending → asking → running → success / failed / denied.

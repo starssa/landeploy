@@ -159,14 +159,17 @@ function pcs(){
 
 function os(){
   const L = Object.values(S.library).sort((a,b)=>a.name.localeCompare(b.name));
-  const st = e => e.status==='ready'?'<span class="pill ok">ready</span>':e.status.startsWith('error')?`<span class="pill bad" title="${esc(e.status)}">error</span>`:`<span class="pill warn">${esc(e.status)}…</span>`;
-  return `<h1>OS library</h1><p class="sub">Drop ISO files here (or copy them into <span class="mono">${esc(S.server.data_dir)}/isos</span> and click Rescan). LANDeploy extracts them and figures out how to boot them over the network.</p>
+  const st = e => e.status==='ready'?`<span class="pill ok">ready</span> ${e.mode==='mount'?'<span class="pill acc" title="Mounted from the ISO, no copy on disk">mounted</span>':'<span class="pill" title="Files copied to disk">extracted</span>'}`:e.status.startsWith('error')?`<span class="pill bad" title="${esc(e.status)}">error</span>`:`<span class="pill warn">${esc(e.status)}…</span>`;
+  return `<h1>OS library</h1><p class="sub">Drop ISO files here (or copy them into <span class="mono">${esc(S.server.data_dir)}/isos</span> and click Rescan). LANDeploy prepares them and figures out how to boot them over the network.</p>
+  <div class="card" style="margin-bottom:12px;display:flex;flex-direction:column;gap:8px"><b>Prepare new ISOs by</b>
+    <label class="check" style="margin:0"><input type="radio" name="isomode" value="mount" ${S.settings.iso_mode!=='extract'?'checked':''}> <span><b>Mounting</b> <span class="muted">— no copy, no extra disk space; replacing the ISO updates it (needs admin rights)</span></span></label>
+    <label class="check" style="margin:0"><input type="radio" name="isomode" value="extract" ${S.settings.iso_mode==='extract'?'checked':''}> <span><b>Extracting</b> <span class="muted">— copies the files (uses as much space again)</span></span></label></div>
   <div class="drop" id="dropIso">⬆️ <b>Drop ISO files here</b> or click to choose<div class="bar" hidden><i></i></div><input type="file" accept=".iso" multiple hidden></div>
   <div class="row" style="margin:14px 0"><div class="sp"></div><button class="btn" data-act="rescan">↻ Rescan folder</button></div>
   ${L.length?`<table><tr><th>Name</th><th>Type</th><th>Size</th><th>Status</th><th></th></tr>${L.map(e=>`<tr>
     <td><b>${esc(e.name)}</b><div class="muted mono">${esc(e.iso)}</div></td>
     <td>${e.boot?.type?`<span class="pill">${TYPES[e.boot.type]}</span>`:'—'}</td><td>${size(e.size)}</td><td>${st(e)} ${e.enabled?'':'<span class="pill">hidden</span>'}</td>
-    <td><div class="row"><button class="btn s" data-act="edit" data-id="${e.id}">Options</button><button class="btn s" data-act="prep" data-id="${e.id}">Re-extract</button><button class="btn s d" data-act="del" data-id="${e.id}">Delete</button></div></td></tr>`).join('')}</table>`:'<div class="card empty">No ISOs yet.</div>'}
+    <td><div class="row"><button class="btn s" data-act="edit" data-id="${e.id}">Options</button><button class="btn s" data-act="prep" data-id="${e.id}" title="Prepare again (e.g. after replacing the ISO file)">↻ Refresh</button><button class="btn s d" data-act="del" data-id="${e.id}">Delete</button></div></td></tr>`).join('')}</table>`:'<div class="card empty">No ISOs yet.</div>'}
   <h2>What works</h2><div class="card muted">
   <b>Windows 10/11</b>: boots the ISO's WinPE with wimboot, then runs Setup from the SMB share (optionally unattended). ·
   <b>Ubuntu</b>: live/installer over HTTP, optional autoinstall. · <b>Fedora/RHEL/Alma/Rocky</b>: live or Anaconda (inst.repo), optional kickstart. ·
@@ -389,12 +392,13 @@ function editEntry(id){
   const field = t==='windows'?['unattend','autounattend.xml for Windows Setup (optional)',WIN_TPL]:t==='ubuntu'?['autoinstall','cloud-init autoinstall user-data (optional)',UBU_TPL]:t==='fedora'&&!e.boot.live?['kickstart','Kickstart file (optional)',KS_TPL]:null;
   dlg(`<h3>${esc(e.name)}</h3><p class="muted">${TYPES[t]||'?'} · <span class="mono">${esc(e.iso)}</span></p>
    <label>Display name</label><input id="ename" value="${esc(e.name)}">
+   <label>Storage</label><select id="emode"><option value="mount" ${e.mode==='mount'?'selected':''}>Mounted: read straight from the ISO (no copy)</option><option value="extract" ${e.mode!=='mount'?'selected':''}>Extracted: files copied to disk</option></select>
    <label class="check"><input type="checkbox" id="eon" ${e.enabled?'checked':''}> Show in the network boot menu</label>
    ${t!=='windows'&&t!=='generic'?`<label>Extra kernel arguments</label><input id="eargs" class="mono" value="${esc(e.extra_args)}" placeholder="e.g. quiet splash">`:''}
    ${field?`<label>${field[1]} <a href="#" id="etpl">insert template</a></label><textarea id="eans">${esc(e[field[0]])}</textarea>`:''}
    <div class="foot"><button class="btn" onclick="closeDlg()">Cancel</button><button class="btn p" id="esave">Save</button></div>`);
   if(field) $('#etpl').onclick = ev => { ev.preventDefault(); $('#eans').value = field[2]; };
-  $('#esave').onclick = async () => { const b = {name:$('#ename').value, enabled:$('#eon').checked}; if($('#eargs')) b.extra_args=$('#eargs').value; if(field) b[field[0]]=$('#eans').value;
+  $('#esave').onclick = async () => { const b = {name:$('#ename').value, enabled:$('#eon').checked, mode:$('#emode').value}; if($('#eargs')) b.extra_args=$('#eargs').value; if(field) b[field[0]]=$('#eans').value;
     await api(`/api/library/${id}/update`, b); closeDlg(); toast('Saved'); load(); };
 }
 
@@ -404,6 +408,7 @@ function upload(url, file, barEl){ return new Promise((res, rej) => { const x = 
 
 /* ---------------------------------------------------------------- actions */
 function bind(){
+  document.querySelectorAll('input[name=isomode]').forEach(r=>r.onchange=async()=>{ await api('/api/settings',{iso_mode:r.value}); toast(r.value==='mount'?'New ISOs will be mounted':'New ISOs will be extracted'); load(); });
   document.querySelectorAll('[data-copy]').forEach(b=>b.onclick=()=>copyText(b.dataset.copy));
   document.querySelectorAll('[data-ostab]').forEach(b=>b.onclick=()=>{ osTab=b.dataset.ostab; render(); });
   document.querySelectorAll('[data-gen]').forEach(b=>b.onclick=()=>{ GEN.type=b.dataset.gen; GEN.id = GEN.type==='switch' ? Object.keys(PRESETS)[1] : ''; render(); });
@@ -430,7 +435,7 @@ function bind(){
       case 'unassign': await api('/api/assign',{mac:d.mac, entry_id:null}); toast('Cancelled'); return load();
       case 'rename': { const n = prompt('Name for this computer', S.machines[d.mac]?.name||''); if(n!==null){ await api('/api/machine',{mac:d.mac,name:n}); load(); } return; }
       case 'addpc': { const m = prompt('MAC address (aa:bb:cc:dd:ee:ff)'); if(m){ const n = prompt('Name (optional)')||''; await api('/api/machine',{mac:m,name:n}); load(); } return; }
-      case 'rescan': { const r = await api('/api/library/scan',{}); toast(`${r.added.length} new ISO(s)`); return load(); }
+      case 'rescan': { const r = await api('/api/library/scan',{}); toast(r.added.length ? `${r.added.length} ISO(s) to prepare` : 'Nothing new'); return load(); }
       case 'prep': await api(`/api/library/${d.id}/prepare`,{}); return load();
       case 'del': if(confirm('Remove from library? (extracted files are deleted)')){ await api(`/api/library/${d.id}/delete`,{delete_iso:confirm('Also delete the ISO file itself?')}); load(); } return;
       case 'edit': return editEntry(d.id);
