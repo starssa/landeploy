@@ -27,7 +27,7 @@ import unattend
 import tools
 import pxe
 
-VERSION = "1.5.0"
+VERSION = "1.5.1"
 # RES: bundled read-only files (web/, agent/). HOME: where data/ and bootfiles/ live.
 # When packaged with PyInstaller, RES is the unpack folder and HOME is the folder of the executable.
 FROZEN = getattr(sys, "frozen", False)
@@ -691,6 +691,30 @@ def make_handler(app):
             if p == "/api/wol":
                 pxe.send_wol(norm_mac(self.body_json().get("mac")))
                 return self.send(body={"ok": True})
+            if p == "/api/computers/remove":               # {macs: [...], agents: [...]}
+                b = self.body_json()
+                macs = {norm_mac(x) for x in b.get("macs", [])} - {""}
+                agents = set(b.get("agents", []))
+                with st.lock:
+                    for a in st.d["agents"].values():      # a PC's agent goes with it
+                        if macs & set(a.get("macs", [])):
+                            agents.add(a["id"])
+                    names = [st.d["machines"].get(m, {}).get("name") or m for m in macs if m in st.d["machines"]]
+                    names += [st.d["agents"][x]["hostname"] for x in agents if x in st.d["agents"]
+                              and not macs & set(st.d["agents"][x].get("macs", []))]
+                    for m in macs:
+                        st.d["machines"].pop(m, None)
+                        st.d["assignments"].pop(m, None)   # cancel a scheduled OS install
+                        app.live.pop(m, None)
+                    for x in agents:
+                        st.d["agents"].pop(x, None)
+                    for j in st.d["jobs"].values():        # software not yet installed is cancelled
+                        if j["agent_id"] in agents and j["status"] in ("pending", "asking"):
+                            j.update(status="cancelled", updated=now())
+                    st.save()
+                if names:
+                    st.event(f"Removed from the list: {', '.join(names)}")
+                return self.send(body={"ok": True, "removed": len(names)})
             if p == "/api/machine":
                 b = self.body_json()
                 mac = norm_mac(b.get("mac"))

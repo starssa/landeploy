@@ -158,7 +158,8 @@ function pcs(){
     <td><div class="row">${m?`<button class="btn s p" data-act="osw" data-mac="${m.mac}">Deploy OS</button>`:''}
       ${a?`<button class="btn s" data-act="sww" data-agent="${a.id}">Install software</button>`:''}
       ${m?`<button class="btn s" data-act="wol" data-mac="${m.mac}" title="Wake-on-LAN">⏻</button><button class="btn s" data-act="rename" data-mac="${m.mac}">✎</button>`:''}
-      ${e?`<button class="btn s d" data-act="unassign" data-mac="${m.mac}">Cancel</button>`:''}</div></td></tr>`; };
+      ${e?`<button class="btn s d" data-act="unassign" data-mac="${m.mac}">Cancel</button>`:''}
+      <button class="btn s d" data-act="rmpc" data-key="${key}" title="Remove from the list">🗑</button></div></td></tr>`; };
   const body = rows.map(m=>tr(m, agentByMac[m.mac])).concat(extra.map(a=>tr(null,a))).join('');
   const counts = {}; rows.forEach(m=>counts[m.status]=(counts[m.status]||0)+1); extra.forEach(a=>counts[a.status]=(counts[a.status]||0)+1);
   const chips = Object.keys(STATUS).filter(k=>counts[k]).map(k=>`${statusPill(k)} <b style="margin-right:10px">${counts[k]}</b>`).join('');
@@ -167,7 +168,7 @@ function pcs(){
     ${chips?`<div class="row" style="margin-bottom:12px">${chips}<span class="muted" title="Network boot and install come from LANDeploy itself; On = the agent reports, the PC answers ping, or it just asked the network for an address">ⓘ how is this detected?</span></div>`:''}
     <div class="card row" id="bulk" style="margin-bottom:12px;${SEL.size?'':'display:none'}"><b id="bulkn">${SEL.size} selected</b><div class="sp"></div>
       <button class="btn p" data-act="bulkos">Deploy OS to selected</button><button class="btn" data-act="bulksw">Install software on selected</button>
-      <button class="btn" data-act="bulkwol">⏻ Wake selected</button><button class="btn" data-act="bulkclear">Clear</button></div>
+      <button class="btn" data-act="bulkwol">⏻ Wake selected</button><button class="btn d" data-act="bulkrm">🗑 Remove selected</button><button class="btn" data-act="bulkclear">Clear</button></div>
     ${body?`<table><tr><th><input type="checkbox" id="selall"></th><th>Status</th><th>Computer</th><th>Hardware / OS</th><th>Scheduled</th><th>Agent</th><th></th></tr>${body}</table>`:'<div class="card empty">No computers yet. Boot a PC from the network (usually F12 → "PXE / Network boot"), or install the agent.</div>'}`;
 }
 
@@ -501,6 +502,16 @@ function bind(){
       case 'bulksw': { const ids = selAgents(); if(!ids.length) return toast('None of the selected PCs runs the agent'); return swWizard(null, ids); }
       case 'bulkwol': { const macs = selMacs(); for(const m of macs) await api('/api/wol',{mac:m}); return toast(`Wake-on-LAN sent to ${macs.length} PC(s)`); }
       case 'bulkclear': SEL.clear(); return render();
+      case 'rmpc': case 'bulkrm': {
+          const keys = d.act==='rmpc' ? [d.key] : [...SEL];
+          const label = k => k[0]==='m' ? (S.machines[k.slice(2)]?.name || k.slice(2)) : (S.agents[k.slice(2)]?.hostname || 'PC');
+          const list = keys.map(label);
+          const hasAgent = keys.some(k => k[0]==='a' || Object.values(S.agents).some(a=>a.macs.includes(k.slice(2))));
+          if(!confirm(`Remove ${list.length>3 ? list.length+' computers' : list.join(', ')} from the list?\n\n`
+             + `Its scheduled OS install and pending software are cancelled. Nothing is changed on the PC itself.`
+             + (hasAgent ? `\n\nA PC whose agent is still installed comes back at its next report: uninstall the agent first (Agents & tools) to remove it for good.` : `\n\nIt comes back if it network-boots again.`))) return;
+          const r = await api('/api/computers/remove', {macs: keys.filter(k=>k[0]==='m').map(k=>k.slice(2)), agents: keys.filter(k=>k[0]==='a').map(k=>k.slice(2))});
+          keys.forEach(k=>SEL.delete(k)); toast(`${r.removed} computer(s) removed`); return load(); }
       case 'wuseall': for(const e of Object.values(S.library).filter(e=>e.boot?.type==='windows')) await api(`/api/library/${e.id}/update`,{answer:'profile'}); toast('All Windows ISOs use this page'); return load();
       case 'wadd': wpDraft().accounts.push({prefix:'User', suffix:'number', count:1, admin:false, password:''}); return render();
       case 'wdel': wpDraft().accounts.splice(+d.i,1); return render();
