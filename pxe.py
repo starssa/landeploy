@@ -44,6 +44,8 @@ def parse_dhcp(data):
         "msgtype": opts.get(53, b"\0")[0],
         "is_pxe": opts.get(60, b"").startswith(b"PXEClient"),
         "is_ipxe": opts.get(77, b"") == b"iPXE" or 175 in opts,
+        "req_ip": socket.inet_ntoa(opts[50]) if len(opts.get(50, b"")) == 4 else "",
+        "hostname": opts.get(12, b"").decode(errors="replace"),
     }
 
 
@@ -76,8 +78,10 @@ def build_reply(req, msgtype, server_ip, bootfile):
 class ProxyDHCP:
     """choose_bootfile(mac, arch, is_ipxe) -> str ; on_seen(mac, arch_name) -> None"""
 
-    def __init__(self, server_ip, choose_bootfile, on_seen=None):
-        self.ip, self.choose, self.on_seen = server_ip, choose_bootfile, on_seen
+    def __init__(self, server_ip, choose_bootfile, on_seen=None, on_dhcp=None):
+        """on_dhcp(req) is called for EVERY DHCP request on the LAN (not only network boots):
+        a PC asking for an address is a PC that was just switched on."""
+        self.ip, self.choose, self.on_seen, self.on_dhcp = server_ip, choose_bootfile, on_seen, on_dhcp
         self.ok = False
 
     def start(self):
@@ -106,7 +110,14 @@ class ProxyDHCP:
 
     def _handle(self, s, port, data, addr):
         req = parse_dhcp(data)
-        if not req or req["op"] != 1 or not req["is_pxe"]:
+        if not req or req["op"] != 1:
+            return
+        if self.on_dhcp and port == 67:
+            try:
+                self.on_dhcp(req)
+            except Exception:
+                log.exception("on_dhcp")
+        if not req["is_pxe"]:
             return
         mt = req["msgtype"]
         bootfile = self.choose(req["mac"], req["arch"], req["is_ipxe"])
@@ -237,6 +248,25 @@ class Beacon:
             data, addr = s.recvfrom(256)
             if data.strip() == b"LANDEPLOY?":
                 s.sendto(b"LANDEPLOY " + self.url.encode(), addr)
+
+
+def ping(ip, timeout=1):
+    """True if the host answers one ping. No console window flashes on Windows."""
+    import os
+    import subprocess
+    import sys
+    if os.name == "nt":
+        cmd, flags = ["ping", "-n", "1", "-w", str(timeout * 1000), ip], 0x08000000
+    elif sys.platform == "darwin":
+        cmd, flags = ["ping", "-c", "1", "-t", str(timeout), ip], 0
+    else:
+        cmd, flags = ["ping", "-c", "1", "-W", str(timeout), ip], 0
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 3, creationflags=flags)
+    except Exception:
+        return False
+    # Windows ping can exit 0 for "destination unreachable": require a real reply
+    return r.returncode == 0 and ("ttl=" in r.stdout.lower())
 
 
 def send_wol(mac):

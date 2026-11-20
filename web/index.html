@@ -86,7 +86,16 @@ const ago = t => { if(!t) return '—'; const d = Date.now()/1000 - t; return d<
 const size = b => b>1e9?(b/1e9).toFixed(1)+' GB':b>1e6?(b/1e6).toFixed(0)+' MB':b>1e3?(b/1e3).toFixed(0)+' KB':(b||0)+' B';
 const toast = m => { const t=$('#toast'); t.textContent=m; t.classList.add('on'); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove('on'),2600); };
 async function api(path, body){ const r = await fetch(path, body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); const j = await r.json().catch(()=>({})); if(!r.ok) throw new Error(j.error||r.statusText); return j; }
-async function load(){ S = await api('/api/state'); $('#srv').innerHTML = `Server<br><b class="mono" style="color:#e2e8f0">${esc(S.server.base)}</b><br>v${esc(S.server.version)}`; render(); }
+const STATUS = {booting:['🟣','Network-booting','#7c3aed','#ede9fe'], installing:['🔵','Installing','#1d4ed8','#dbeafe'],
+                on:['🟢','On','#15803d','#dcfce7'], off:['⚫','Off','#475569','#f1f5f9']};
+const statusPill = st => { const [i,l,c,bg] = STATUS[st] || STATUS.off; return `<span class="pill" style="background:${bg};color:${c};font-weight:600">${i} ${l}</span>`; };
+let lastEventT = null;
+function bootNotices(){                     // pop-up when a PC starts network-booting
+  const newest = S.events.length ? S.events[0].t : 0;
+  if(lastEventT !== null) S.events.filter(e=>e.t>lastEventT && e.k==='boot').reverse().forEach((e,i)=>setTimeout(()=>toast('🟣 '+e.msg), i*2700));
+  lastEventT = Math.max(lastEventT||0, newest);
+}
+async function load(){ S = await api('/api/state'); bootNotices(); $('#srv').innerHTML = `Server<br><b class="mono" style="color:#e2e8f0">${esc(S.server.base)}</b><br>v${esc(S.server.version)}`; render(); }
 const TYPES = {windows:'Windows',arch:'Arch Linux',ubuntu:'Ubuntu',fedora:'Fedora/RHEL','debian-live':'Debian live',generic:'Raw ISO'};
 const online = a => Date.now()/1000 - a.last_seen < 90;
 
@@ -141,21 +150,25 @@ function pcs(){
   const extra = Object.values(S.agents).filter(a=>!a.macs.some(m=>S.machines[m]));
   const tr = (m, a) => { const as = m && S.assignments[m.mac], e = as && S.library[as.entry_id];
     const key = m ? 'm:'+m.mac : 'a:'+a.id;
-    return `<tr><td style="width:32px"><input type="checkbox" class="sel" data-key="${key}" ${SEL.has(key)?'checked':''}></td><td><b>${esc(m?.name || a?.hostname || 'Unnamed PC')}</b><div class="muted mono">${esc(m?.mac || a.macs[0] || '')}</div></td>
+    const stt = m ? m.status : a.status;
+    return `<tr><td style="width:32px"><input type="checkbox" class="sel" data-key="${key}" ${SEL.has(key)?'checked':''}></td><td style="width:150px">${statusPill(stt)}</td><td><b>${esc(m?.name || a?.hostname || 'Unnamed PC')}</b><div class="muted mono">${esc(m?.mac || a.macs[0] || '')}</div></td>
     <td>${m ? esc([m.manufacturer, m.product].filter(Boolean).join(' ') || '—') : '—'}<div class="muted">${esc(a? a.os : (m.platform||m.arch||''))}</div></td>
     <td>${e ? `<span class="pill acc">${as.mode==='auto'?'Auto-install':'Ask on screen'}: ${esc(e.name)}</span>` : m?.state==='installing' ? `<span class="pill warn">Installing ${esc(m.last_deploy)}</span>` : '<span class="muted">—</span>'}</td>
-    <td>${a ? `<span class="pill ${online(a)?'ok':''}">${online(a)?'agent online':'agent offline'}</span>` : '<span class="muted">no agent</span>'}<div class="muted">${ago(Math.max(m?.last_seen||0, a?.last_seen||0))}</div></td>
+    <td>${a ? `<span class="pill ${online(a)?'ok':''}">${online(a)?'agent online':'agent offline'}</span>` : '<span class="muted">no agent</span>'}<div class="muted">${(a ? 'last report '+ago(a.last_seen) : 'seen '+ago(m.last_seen))}</div></td>
     <td><div class="row">${m?`<button class="btn s p" data-act="osw" data-mac="${m.mac}">Deploy OS</button>`:''}
       ${a?`<button class="btn s" data-act="sww" data-agent="${a.id}">Install software</button>`:''}
       ${m?`<button class="btn s" data-act="wol" data-mac="${m.mac}" title="Wake-on-LAN">⏻</button><button class="btn s" data-act="rename" data-mac="${m.mac}">✎</button>`:''}
       ${e?`<button class="btn s d" data-act="unassign" data-mac="${m.mac}">Cancel</button>`:''}</div></td></tr>`; };
   const body = rows.map(m=>tr(m, agentByMac[m.mac])).concat(extra.map(a=>tr(null,a))).join('');
-  return `<div class="row"><div><h1>Computers</h1><p class="sub">PCs appear here after their first network boot, or when the agent registers.</p></div><div class="sp"></div>
+  const counts = {}; rows.forEach(m=>counts[m.status]=(counts[m.status]||0)+1); extra.forEach(a=>counts[a.status]=(counts[a.status]||0)+1);
+  const chips = Object.keys(STATUS).filter(k=>counts[k]).map(k=>`${statusPill(k)} <b style="margin-right:10px">${counts[k]}</b>`).join('');
+  return `<div class="row"><div><h1>Computers</h1><p class="sub">PCs appear here after their first network boot, or when the agent registers. Status updates live.</p></div><div class="sp"></div>
     <button class="btn" data-act="addpc">+ Add by MAC address</button><button class="btn p" data-act="osw">Deploy OS…</button></div>
+    ${chips?`<div class="row" style="margin-bottom:12px">${chips}<span class="muted" title="Network boot and install come from LANDeploy itself; On = the agent reports, the PC answers ping, or it just asked the network for an address">ⓘ how is this detected?</span></div>`:''}
     <div class="card row" id="bulk" style="margin-bottom:12px;${SEL.size?'':'display:none'}"><b id="bulkn">${SEL.size} selected</b><div class="sp"></div>
       <button class="btn p" data-act="bulkos">Deploy OS to selected</button><button class="btn" data-act="bulksw">Install software on selected</button>
       <button class="btn" data-act="bulkwol">⏻ Wake selected</button><button class="btn" data-act="bulkclear">Clear</button></div>
-    ${body?`<table><tr><th><input type="checkbox" id="selall"></th><th>Computer</th><th>Hardware / OS</th><th>Scheduled</th><th>Agent</th><th></th></tr>${body}</table>`:'<div class="card empty">No computers yet. Boot a PC from the network (usually F12 → "PXE / Network boot"), or install the agent.</div>'}`;
+    ${body?`<table><tr><th><input type="checkbox" id="selall"></th><th>Status</th><th>Computer</th><th>Hardware / OS</th><th>Scheduled</th><th>Agent</th><th></th></tr>${body}</table>`:'<div class="card empty">No computers yet. Boot a PC from the network (usually F12 → "PXE / Network boot"), or install the agent.</div>'}`;
 }
 
 function os(){

@@ -27,7 +27,7 @@ import unattend
 import tools
 import pxe
 
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 # RES: bundled read-only files (web/, agent/). HOME: where data/ and bootfiles/ live.
 # When packaged with PyInstaller, RES is the unpack folder and HOME is the folder of the executable.
 FROZEN = getattr(sys, "frozen", False)
@@ -95,9 +95,9 @@ class Store:
             tmp.write_text(json.dumps(self.d, indent=1))
             tmp.replace(self.file)
 
-    def event(self, msg):
+    def event(self, msg, kind="info"):
         with self.lock:
-            self.d["events"] = ([{"t": now(), "msg": msg}] + self.d["events"])[:200]
+            self.d["events"] = ([{"t": now(), "msg": msg, "k": kind}] + self.d["events"])[:200]
             self.save()
         log.info(msg)
 
@@ -221,6 +221,7 @@ class App:
         self.bootfiles.mkdir(parents=True, exist_ok=True)
         self.lib = Library(self.store)
         self.services = {}          # "dhcp"/"tftp" -> service object with .ok once its port is bound
+        self.live = {}              # mac -> {pxe_at, dhcp_at, ping_at}: in memory only, changes every few seconds
         self.tools = tools.Tools(self.store.dir / "tools", self.bootfiles, [RES / "agent" / "bin"])
 
     # ------------------------------------------------ PXE hooks
@@ -238,7 +239,56 @@ class App:
         return None
 
     def on_pxe_seen(self, mac, arch):
-        self.store.machine(mac, arch=arch, state="pxe")
+        m = self.store.machine(mac, arch=arch, state="pxe")
+        live = self.live.setdefault(norm_mac(mac), {})
+        live["pxe_at"] = now()
+        if now() - live.get("pxe_event", 0) > 120:     # one notice per boot, not per packet
+            live["pxe_event"] = now()
+            self.store.event(f"{(m or {}).get('name') or mac} is network-booting", kind="boot")
+
+    def on_dhcp(self, req):
+        """Any known PC asking for an IP address has just been switched on (or woke up)."""
+        mac = norm_mac(req["mac"])
+        m = self.store.d["machines"].get(mac)
+        if not m:
+            return                                     # phones, printers... are not tracked
+        self.live.setdefault(mac, {})["dhcp_at"] = now()
+        ip = req["req_ip"] or (socket.inet_ntoa(req["ciaddr"]) if req["ciaddr"] != b"\0\0\0\0" else "")
+        if ip and m.get("ip") != ip:
+            self.store.machine(mac, ip=ip)
+
+    def monitor(self, interval=20):
+        """Ping every known PC with an IP address, in the background."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        def one(mac, ip):
+            if pxe.ping(ip):
+                self.live.setdefault(mac, {})["ping_at"] = now()
+
+        def loop():
+            with ThreadPoolExecutor(32) as pool:
+                while True:
+                    targets = {mac: m["ip"] for mac, m in list(self.store.d["machines"].items()) if m.get("ip")}
+                    for a in list(self.store.d["agents"].values()):
+                        for mac in a.get("macs", []):
+                            if mac in self.store.d["machines"] and a.get("ip"):
+                                targets.setdefault(mac, a["ip"])
+                    list(pool.map(lambda kv: one(*kv), targets.items()))
+                    time.sleep(interval)
+        threading.Thread(target=loop, daemon=True, name="monitor").start()
+
+    def status(self, m, agent=None):
+        """booting | installing | on | off  (from network boot, install, agent, ping and DHCP signals)"""
+        t, live = now(), self.live.get(m["mac"], {}) if m else {}
+        if t - live.get("pxe_at", 0) < 90:
+            return "booting"
+        agent_on = bool(agent and t - agent.get("last_seen", 0) < 90)
+        if (m and m.get("state") == "installing" and t - m.get("last_deploy_at", 0) < 2 * 3600
+                and not (agent_on and agent.get("last_seen", 0) > m.get("last_deploy_at", 0) + 300)):
+            return "installing"
+        if agent_on or t - live.get("ping_at", 0) < 60 or t - live.get("dhcp_at", 0) < 60:
+            return "on"
+        return "off"
 
     # ------------------------------------------------ iPXE scripts
     def menu_script(self, q):
@@ -521,6 +571,12 @@ def make_handler(app):
                                "data_dir": str(st.dir.resolve()), "version": VERSION,
                                "pxe": {k: getattr(v, "ok", False) for k, v in app.services.items()},
                                "pxe_enabled": bool(app.services)}
+                agent_by_mac = {mac: a for a in st.d["agents"].values() for mac in a.get("macs", [])}
+                for mac, m in d["machines"].items():
+                    m["status"] = app.status(st.d["machines"].get(mac, m), agent_by_mac.get(mac))
+                for a in d["agents"].values():
+                    a["status"] = "on" if now() - a.get("last_seen", 0) < 90 else "off"
+                d["server"]["now"] = now()
                 d["tools"] = app.tools.info()
                 d["win_profile"] = app.win_profile()
                 d["win_options"] = {"languages": unattend.LANGUAGES, "keyboards": unattend.KEYBOARDS,
@@ -733,8 +789,13 @@ def make_handler(app):
                                            "ip": self.client_address[0], "version": b.get("version", ""),
                                            "last_seen": now()}
                     for mac in st.d["agents"][aid]["macs"]:
-                        if mac in st.d["machines"]:
-                            st.d["machines"][mac]["name"] = st.d["machines"][mac].get("name") or b.get("hostname")
+                        m = st.d["machines"].get(mac)
+                        if m:
+                            m["name"] = m.get("name") or b.get("hostname")
+                            m["ip"] = self.client_address[0]
+                            if m.get("state") == "installing" and now() - m.get("last_deploy_at", 0) > 300:
+                                m["state"] = "ready"
+                                st.event(f"{m['name'] or mac} finished installing {m.get('last_deploy', '')}".strip())
                     st.save()
                 if new:
                     st.event(f"Agent registered: {b.get('hostname')} ({b.get('os')})")
@@ -814,12 +875,13 @@ def main(argv=None):
     s = app.store.settings
     if not a.no_pxe:
         if s["proxy_dhcp"]:
-            app.services["dhcp"] = pxe.ProxyDHCP(app.ip, app.choose_bootfile, app.on_pxe_seen)
+            app.services["dhcp"] = pxe.ProxyDHCP(app.ip, app.choose_bootfile, app.on_pxe_seen, app.on_dhcp)
         if s["tftp"]:
             app.services["tftp"] = pxe.TFTPServer(app.bootfiles)
         for svc in app.services.values():
             svc.start()
     pxe.Beacon(app.base).start()
+    app.monitor()
     app.lib.scan()
     httpd = ThreadingHTTPServer(("", app.port), make_handler(app))
     httpd.daemon_threads = True
