@@ -61,6 +61,7 @@ pre{background:#0f172a;color:#e2e8f0;padding:14px;border-radius:10px;overflow:au
   <button data-v="home" class="on">🏠 Overview</button>
   <button data-v="pcs">💻 Computers</button>
   <button data-v="os">💿 OS library</button>
+  <button data-v="win">🪟 Windows setup</button>
   <button data-v="sw">📦 Software</button>
   <button data-v="tools">🧰 Agents &amp; tools</button>
   <button data-v="log">🕘 Activity</button>
@@ -91,7 +92,7 @@ const online = a => Date.now()/1000 - a.last_seen < 90;
 
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => { view=b.dataset.v; document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('on',x===b)); render(); });
 
-function render(){ $('#view').innerHTML = ({home, pcs, os, sw, tools, log, set})[view](); bind(); }
+function render(){ $('#view').innerHTML = ({home, pcs, os, win, sw, tools, log, set})[view](); bind(); }
 
 /* copy that also works on plain http:// LAN addresses (navigator.clipboard needs https) */
 function copyText(t){
@@ -266,6 +267,59 @@ function genCommand(){
   }
 }
 
+/* ---------------------------------------------------------------- Windows setup page */
+let WPD = null;                      // unsaved draft of the Windows setup form
+const SUFFIX = {number:'1, 2, 3…', number2:'01, 02, 03…', letter:'a, b, c…', LETTER:'A, B, C…', none:'none (one account)'};
+function sfx(kind, i){ if(kind==='number') return String(i+1); if(kind==='number2') return String(i+1).padStart(2,'0');
+  if(kind==='letter'||kind==='LETTER'){ let s='', n=i; do{ s=String.fromCharCode(97+n%26)+s; n=Math.floor(n/26)-1; }while(n>=0); return kind==='letter'?s:s.toUpperCase(); } return ''; }
+const accNames = r => Array.from({length: r.suffix==='none'?1:Math.max(1,Math.min(+r.count||1,50))}, (_,i)=>(r.prefix||'')+sfx(r.suffix,i));
+function win(){
+  const P = WPD || S.win_profile, O = S.win_options, opt = (o, v) => Object.entries(o).map(([k,l])=>`<option value="${esc(k)}" ${k===v?'selected':''}>${esc(l)}</option>`).join('');
+  const names = P.accounts.flatMap(accNames);
+  const pcs = Array.from({length:3},(_,i)=>(P.pc_prefix||'')+sfx(P.pc_suffix,(+P.pc_start||1)-1+i));
+  const wins = Object.values(S.library).filter(e=>e.boot?.type==='windows');
+  return `<div class="row"><div><h1>Windows setup</h1><p class="sub">One set of answers for <b>every Windows ISO</b>: language, accounts, computer names… Each PC gets its own answer file when it starts installing.</p></div><div class="sp"></div>
+    <button class="btn" data-act="wpreview">👁 Preview answer file</button><button class="btn p" data-act="wsave">${WPD?'💾 Save changes':'Saved ✓'}</button></div>
+  <div class="card" style="margin-bottom:14px"><label class="check" style="margin:0;font-size:15px"><input type="checkbox" data-w="enabled" ${P.enabled?'checked':''}> <b>Use these settings for Windows installs</b></label>
+    <div class="muted" style="margin-left:24px">${wins.length} Windows ISO(s) in the library. An ISO can still use its own XML or none: OS library → Options → Answer file.</div>
+    ${(()=>{ const own = wins.filter(e=>(e.answer||(e.unattend?'custom':'profile'))!=='profile'); return own.length?`<div class="pill warn" style="margin:8px 0 0 24px">Not using this page: ${own.map(e=>esc(e.name)+' ('+((e.answer||'custom')==='none'?'no answer file':'own XML')+')').join(', ')} <a href="#" data-act="wuseall">use this page for all</a></div>`:''; })()}
+    <div id="wprob"></div></div>
+  <div style="${P.enabled?'':'opacity:.55'}">
+  <h2>Region</h2><div class="card"><div class="grid2" style="grid-template-columns:1fr 1fr 1fr">
+    <div><label>Language</label><select data-w="language">${opt(Object.fromEntries(Object.entries(O.languages).map(([k,v])=>[k,v[0]])), P.language)}</select></div>
+    <div><label>Keyboard</label><select data-w="keyboard">${opt(O.keyboards, P.keyboard)}</select></div>
+    <div><label>Time zone</label><select data-w="timezone">${opt(Object.fromEntries(O.timezones.map(t=>[t,t])), P.timezone)}</select></div></div></div>
+  <h2>User accounts</h2><div class="card">
+    <table style="border:none"><tr><th>Name prefix</th><th>Suffix</th><th>How many</th><th>Administrator</th>${P.same_password?'':'<th>Password</th>'}<th>Accounts created</th><th></th></tr>
+    ${P.accounts.map((r,i)=>`<tr><td><input data-a="${i}:prefix" value="${esc(r.prefix)}" placeholder="Admin" style="width:140px"></td>
+      <td><select data-a="${i}:suffix">${opt(SUFFIX, r.suffix)}</select></td>
+      <td><input data-a="${i}:count" type="number" min="1" max="50" value="${r.suffix==='none'?1:r.count}" ${r.suffix==='none'?'disabled':''} style="width:80px"></td>
+      <td><input type="checkbox" data-a="${i}:admin" ${r.admin?'checked':''} style="width:auto"></td>
+      ${P.same_password?'':`<td><input data-a="${i}:password" value="${esc(r.password)}" placeholder="password" style="width:140px"></td>`}
+      <td class="mono">${accNames(r).map(esc).join(', ')}</td><td><button class="btn s d" data-act="wdel" data-i="${i}">✕</button></td></tr>`).join('')}</table>
+    <div class="row" style="margin-top:10px"><button class="btn" data-act="wadd">+ Add accounts</button><div class="sp"></div><span class="muted">${names.length} account(s): ${names.map(esc).join(', ')}</span></div>
+    <label class="check" style="margin-top:14px"><input type="checkbox" data-w="same_password" ${P.same_password?'checked':''}> Same password for every account</label>
+    ${P.same_password?`<input data-w="shared_password" value="${esc(P.shared_password)}" placeholder="password (leave empty for no password)" style="max-width:360px">`:''}
+    <div class="muted" style="margin-top:6px">⚠️ Passwords are stored in plain text in the answer file, which PCs download during installation. Use a classroom password, not a personal one.</div></div>
+  <h2>Computer names</h2><div class="card">
+    <label class="check"><input type="radio" name="wpc" value="inventory" ${P.computer_names==='inventory'?'checked':''}> The name given in <b>Computers</b> <span class="muted">(e.g. Salle-Info-03 → SALLE-INFO-03; random if none)</span></label>
+    <label class="check"><input type="radio" name="wpc" value="pattern" ${P.computer_names==='pattern'?'checked':''}> Prefix + suffix, numbered in the order PCs install</label>
+    ${P.computer_names==='pattern'?`<div class="row" style="margin:6px 0 4px 24px"><input data-w="pc_prefix" value="${esc(P.pc_prefix)}" placeholder="PC-" style="width:160px">
+      <select data-w="pc_suffix" style="width:170px">${opt(Object.fromEntries(Object.entries(SUFFIX).filter(([k])=>k!=='none')), P.pc_suffix)}</select>
+      <span class="muted">start at</span><input data-w="pc_start" type="number" min="1" value="${P.pc_start}" style="width:80px">
+      <span class="mono">→ ${pcs.map(n=>esc(n.toUpperCase().slice(0,15))).join(', ')}…</span></div>`:''}
+    <label class="check"><input type="radio" name="wpc" value="random" ${P.computer_names==='random'?'checked':''}> Let Windows choose (DESKTOP-XXXXXXX)</label></div>
+  <h2>Installation</h2><div class="card"><div class="grid2">
+    <div><label>Edition</label><select data-w="edition">${opt({pro:'Windows Pro', home:'Windows Home', education:'Windows Education', ask:'Ask during setup', custom:'My product key…'}, P.edition)}</select>
+      ${P.edition==='custom'?`<input data-w="product_key" class="mono" value="${esc(P.product_key)}" placeholder="XXXXX-XXXXX-XXXXX-XXXXX-XXXXX" style="margin-top:6px">`:'<div class="muted" style="margin-top:4px">Generic key: picks the edition, does not activate Windows.</div>'}</div><div></div></div>
+    <label class="check" style="margin-top:12px"><input type="checkbox" data-w="skip_oobe" ${P.skip_oobe?'checked':''}> Skip the Microsoft-account, Wi-Fi and privacy screens</label>
+    <label class="check"><input type="checkbox" data-w="bypass_requirements" ${P.bypass_requirements?'checked':''}> Install on PCs without TPM 2.0 / Secure Boot / 4 GB RAM (older PCs)</label>
+    <label class="check"><input type="checkbox" data-w="wipe_disk" ${P.wipe_disk?'checked':''}> <b style="color:var(--bad)">Erase the first disk and install without asking</b></label>
+    ${P.wipe_disk?'<div class="card" style="background:#fef2f2;border-color:#fecaca;margin:6px 0 0 24px">⚠️ Everything on disk 0 of each PC is <b>deleted</b> — fully hands-off install. Double-check which PCs you schedule.</div>':'<div class="muted" style="margin-left:24px">Unticked: the person at the PC chooses where to install.</div>'}
+  </div></div>`;
+}
+function wpDraft(){ if(!WPD) WPD = JSON.parse(JSON.stringify(S.win_profile)); return WPD; }
+
 function log(){ return `<div class="row"><h1>Activity</h1><div class="sp"></div><button class="btn" data-act="clearlog">Clear</button></div><p class="sub">Everything LANDeploy did.</p>${events(200)}`; }
 
 function set(){ const s=S.settings;
@@ -389,16 +443,17 @@ function pkgDialog(id){
 
 function editEntry(id){
   const e = S.library[id], t = e.boot.type;
-  const field = t==='windows'?['unattend','autounattend.xml for Windows Setup (optional)',WIN_TPL]:t==='ubuntu'?['autoinstall','cloud-init autoinstall user-data (optional)',UBU_TPL]:t==='fedora'&&!e.boot.live?['kickstart','Kickstart file (optional)',KS_TPL]:null;
+  const field = t==='windows'?['unattend','Custom autounattend.xml',WIN_TPL]:t==='ubuntu'?['autoinstall','cloud-init autoinstall user-data (optional)',UBU_TPL]:t==='fedora'&&!e.boot.live?['kickstart','Kickstart file (optional)',KS_TPL]:null;
   dlg(`<h3>${esc(e.name)}</h3><p class="muted">${TYPES[t]||'?'} · <span class="mono">${esc(e.iso)}</span></p>
    <label>Display name</label><input id="ename" value="${esc(e.name)}">
    <label>Storage</label><select id="emode"><option value="mount" ${e.mode==='mount'?'selected':''}>Mounted: read straight from the ISO (no copy)</option><option value="extract" ${e.mode!=='mount'?'selected':''}>Extracted: files copied to disk</option></select>
    <label class="check"><input type="checkbox" id="eon" ${e.enabled?'checked':''}> Show in the network boot menu</label>
    ${t!=='windows'&&t!=='generic'?`<label>Extra kernel arguments</label><input id="eargs" class="mono" value="${esc(e.extra_args)}" placeholder="e.g. quiet splash">`:''}
+   ${t==='windows'?`<label>Answer file</label><select id="eanswer"><option value="profile" ${(e.answer||(e.unattend?'custom':'profile'))==='profile'?'selected':''}>Windows setup page (shared by all Windows ISOs)</option><option value="custom" ${(e.answer||(e.unattend?'custom':''))==='custom'?'selected':''}>Custom XML below</option><option value="none" ${e.answer==='none'?'selected':''}>None: answer everything at the PC</option></select>`:''}
    ${field?`<label>${field[1]} <a href="#" id="etpl">insert template</a></label><textarea id="eans">${esc(e[field[0]])}</textarea>`:''}
    <div class="foot"><button class="btn" onclick="closeDlg()">Cancel</button><button class="btn p" id="esave">Save</button></div>`);
   if(field) $('#etpl').onclick = ev => { ev.preventDefault(); $('#eans').value = field[2]; };
-  $('#esave').onclick = async () => { const b = {name:$('#ename').value, enabled:$('#eon').checked, mode:$('#emode').value}; if($('#eargs')) b.extra_args=$('#eargs').value; if(field) b[field[0]]=$('#eans').value;
+  $('#esave').onclick = async () => { const b = {name:$('#ename').value, enabled:$('#eon').checked, mode:$('#emode').value}; if($('#eargs')) b.extra_args=$('#eargs').value; if(field) b[field[0]]=$('#eans').value; if($('#eanswer')) b.answer=$('#eanswer').value;
     await api(`/api/library/${id}/update`, b); closeDlg(); toast('Saved'); load(); };
 }
 
@@ -408,6 +463,12 @@ function upload(url, file, barEl){ return new Promise((res, rej) => { const x = 
 
 /* ---------------------------------------------------------------- actions */
 function bind(){
+  document.querySelectorAll('[data-w]').forEach(el=>el.onchange=()=>{ const D=wpDraft(), k=el.dataset.w;
+    D[k] = el.type==='checkbox' ? el.checked : el.type==='number' ? (+el.value||1) : el.value;
+    if(k==='language'){ const kb = S.win_options.languages[el.value]?.[1]; if(kb) D.keyboard = kb; } render(); });
+  document.querySelectorAll('[data-a]').forEach(el=>el.onchange=()=>{ const [i,k]=el.dataset.a.split(':'), r=wpDraft().accounts[+i];
+    r[k] = el.type==='checkbox' ? el.checked : k==='count' ? Math.max(1,+el.value||1) : el.value; render(); });
+  document.querySelectorAll('input[name=wpc]').forEach(el=>el.onchange=()=>{ wpDraft().computer_names = el.value; render(); });
   document.querySelectorAll('input[name=isomode]').forEach(r=>r.onchange=async()=>{ await api('/api/settings',{iso_mode:r.value}); toast(r.value==='mount'?'New ISOs will be mounted':'New ISOs will be extracted'); load(); });
   document.querySelectorAll('[data-copy]').forEach(b=>b.onclick=()=>copyText(b.dataset.copy));
   document.querySelectorAll('[data-ostab]').forEach(b=>b.onclick=()=>{ osTab=b.dataset.ostab; render(); });
@@ -427,6 +488,13 @@ function bind(){
       case 'bulksw': { const ids = selAgents(); if(!ids.length) return toast('None of the selected PCs runs the agent'); return swWizard(null, ids); }
       case 'bulkwol': { const macs = selMacs(); for(const m of macs) await api('/api/wol',{mac:m}); return toast(`Wake-on-LAN sent to ${macs.length} PC(s)`); }
       case 'bulkclear': SEL.clear(); return render();
+      case 'wuseall': for(const e of Object.values(S.library).filter(e=>e.boot?.type==='windows')) await api(`/api/library/${e.id}/update`,{answer:'profile'}); toast('All Windows ISOs use this page'); return load();
+      case 'wadd': wpDraft().accounts.push({prefix:'User', suffix:'number', count:1, admin:false, password:''}); return render();
+      case 'wdel': wpDraft().accounts.splice(+d.i,1); return render();
+      case 'wsave': { const r = await api('/api/winprofile', wpDraft()); WPD = null; await load();
+          if(r.problems.length){ $('#wprob').innerHTML = `<div class="pill bad" style="margin-top:8px">⚠️ ${r.problems.map(esc).join(' · ')}</div>`; toast('Saved, but fix the problems shown'); } else toast('Windows setup saved'); return; }
+      case 'wpreview': { const r = await api('/api/winprofile/preview', {profile: wpDraft()});
+          return dlg(`<h3>Answer file for one PC</h3><p class="muted">Example generated from the current form${r.problems.length?` — <b style="color:var(--bad)">${r.problems.map(esc).join(' · ')}</b>`:''}.</p><pre style="max-height:60vh">${esc(r.xml)}</pre><div class="foot"><button class="btn p" onclick="closeDlg()">Close</button></div>`); }
       case 'fetchtool': await api('/api/tools/fetch',{what:d.what}); toast('Downloading on the server…'); return load();
       case 'genpkg': { const cmd = genCommand(), id = GEN.id.trim();
           const r = await api('/api/packages',{name:id, os:GEN.type==='winget'?'windows':'linux', command:cmd, args:'', consent:true, run_as:GEN.type==='winget'&&GEN.peruser?'user':'system'});

@@ -23,10 +23,11 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 import library
+import unattend
 import tools
 import pxe
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 # RES: bundled read-only files (web/, agent/). HOME: where data/ and bootfiles/ live.
 # When packaged with PyInstaller, RES is the unpack folder and HOME is the folder of the executable.
 FROZEN = getattr(sys, "frozen", False)
@@ -283,6 +284,33 @@ class App:
                 f"chain {base}/menu.ipxe?{ident}&skip=1"]
         return "\n".join(out) + "\n"
 
+    def win_profile(self):
+        return {**unattend.DEFAULT_PROFILE, **self.store.settings.get("win_profile", {})}
+
+    def answer_mode(self, e):
+        """profile (Windows setup page) | custom (XML pasted in the ISO's Options) | none"""
+        return e.get("answer") or ("custom" if e.get("unattend") else "profile")
+
+    def answer_file(self, e, mac):
+        """Write the answer file this PC will use and return its name (None = no answer file)."""
+        mode, st = self.answer_mode(e), self.store
+        if mode == "custom" and e.get("unattend"):
+            name, xml = f"{e['id']}.xml", e["unattend"]
+        elif mode == "profile" and self.win_profile().get("enabled"):
+            prof = self.win_profile()
+            with st.lock:
+                m = st.d["machines"].get(mac) or {}
+                if prof.get("computer_names") == "pattern" and m and "win_number" not in m:
+                    used = [x.get("win_number", -1) for x in st.d["machines"].values()]
+                    m["win_number"] = max([int(prof.get("pc_start", 1)) - 2] + used) + 1
+                    st.save()
+            name = f"{e['id']}-{mac.replace(':', '') or 'any'}.xml"
+            xml = unattend.build(prof, m, m.get("win_number", 0), uefi=(m.get("platform") or "efi") == "efi")
+        else:
+            return None
+        (st.dir / "unattend" / name).write_text(xml, encoding="utf-8")     # outside the (read-only) ISO
+        return name
+
     def entry_script(self, eid, q):
         st = self.store
         e = st.d["library"].get(eid)
@@ -296,8 +324,6 @@ class App:
             if mac:
                 st.machine(mac, state="installing", last_deploy=e["name"], last_deploy_at=now())
         st.event(f"{mac or 'A PC'} started installing {e['name']}")
-        if e["boot"].get("type") == "windows" and e.get("unattend"):
-            (st.dir / "unattend" / f"{eid}.xml").write_text(e["unattend"])     # mounted ISOs are read-only
         return library.boot_script(e, self.base, mac)
 
 
@@ -426,7 +452,9 @@ def make_handler(app):
                 return self.send_file(app.bootfiles / m.group(1))
             m = re.fullmatch(r"/winpe/(\w+)/(winpeshl\.ini|install\.cmd)", p)
             if m and m.group(1) in st.d["library"]:
-                ini, cmd = library.winpe_files(st.d["library"][m.group(1)], st.settings, app.ip)
+                e = st.d["library"][m.group(1)]
+                ans = app.answer_file(e, norm_mac(q.get("mac"))) if m.group(2) == "install.cmd" else None
+                ini, cmd = library.winpe_files(e, st.settings, app.ip, ans)
                 return self.send(body=ini if m.group(2) == "winpeshl.ini" else cmd)
             m = re.fullmatch(r"/autoinstall/(\w+)/(user-data|meta-data|vendor-data)", p)
             if m and m.group(1) in st.d["library"]:
@@ -494,6 +522,9 @@ def make_handler(app):
                                "pxe": {k: getattr(v, "ok", False) for k, v in app.services.items()},
                                "pxe_enabled": bool(app.services)}
                 d["tools"] = app.tools.info()
+                d["win_profile"] = app.win_profile()
+                d["win_options"] = {"languages": unattend.LANGUAGES, "keyboards": unattend.KEYBOARDS,
+                                    "timezones": unattend.TIMEZONES}
                 return self.send(body=d)
             if p == "/api/smbconf":
                 return self.send(body=(
@@ -551,7 +582,7 @@ def make_handler(app):
                 eid, act, e = m.group(1), m.group(2), L[m.group(1)]
                 if act == "update":
                     b = self.body_json()
-                    for k in ("name", "enabled", "extra_args", "unattend", "autoinstall", "kickstart"):
+                    for k in ("name", "enabled", "extra_args", "unattend", "autoinstall", "kickstart", "answer"):
                         if k in b:
                             e[k] = b[k]
                     if b.get("mode") in ("mount", "extract") and b["mode"] != e.get("mode", "extract"):
@@ -589,6 +620,18 @@ def make_handler(app):
                 st.save()
                 st.event(f"Scheduled {L[b['entry_id']]['name']} on {len(macs)} computer(s) ({mode})")
                 return self.send(body={"ok": True, "count": len(macs)})
+            if p == "/api/winprofile":                     # save the Windows setup page
+                prof = {**unattend.DEFAULT_PROFILE, **self.body_json()}
+                errs = unattend.check(prof) if prof.get("enabled") else []
+                st.settings["win_profile"] = prof
+                st.save()
+                return self.send(body={"ok": True, "problems": errs})
+            if p == "/api/winprofile/preview":             # {profile, mac?} -> XML for one PC
+                b = self.body_json()
+                prof = {**unattend.DEFAULT_PROFILE, **b.get("profile", {})}
+                m = st.d["machines"].get(norm_mac(b.get("mac"))) or {"name": "Salle-Info-01", "platform": "efi"}
+                xml = unattend.build(prof, m, m.get("win_number", 0), uefi=(m.get("platform") or "efi") == "efi")
+                return self.send(body={"xml": xml, "problems": unattend.check(prof)})
             if p == "/api/wol":
                 pxe.send_wol(norm_mac(self.body_json().get("mac")))
                 return self.send(body={"ok": True})

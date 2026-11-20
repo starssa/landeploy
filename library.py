@@ -215,7 +215,7 @@ def boot_script(entry, base, mac):
     if t == "windows":
         lines = [head, f"kernel {base}/bootfiles/wimboot gui\n",
                  f"initrd {base}/winpe/{eid}/winpeshl.ini winpeshl.ini\n",
-                 f"initrd {base}/winpe/{eid}/install.cmd install.cmd\n"]
+                 f"initrd {base}/winpe/{eid}/install.cmd?mac={mac} install.cmd\n"]
         if info.get("bootmgr"):
             lines.append(f"iseq ${{platform}} pcbios && initrd {files}/{info['bootmgr']} bootmgr ||\n")
         lines += [f"initrd {files}/{info['bcd']} BCD\n", f"initrd {files}/{info['sdi']} boot.sdi\n",
@@ -237,10 +237,10 @@ def boot_script(entry, base, mac):
     return head + f"sanboot --no-describe {iso}\n"
 
 
-def winpe_files(entry, settings, server_ip):
+def winpe_files(entry, settings, server_ip, answer_file=None):
     share = settings.get("smb_share", "landeploy")
     user, pw = settings.get("smb_user") or "guest", settings.get("smb_pass") or ""
-    unattend = f" /unattend:Z:\\unattend\\{entry['id']}.xml" if entry.get("unattend") else ""
+    unattend = f" /unattend:Z:\\unattend\\{answer_file}" if answer_file else ""
     folder = "mnt" if entry.get("mode") == "mount" else "library"     # mounted ISO or extracted copy
     winpeshl = '[LaunchApps]\r\n"install.cmd"\r\n'
     cmd = ("@echo off\r\n"
