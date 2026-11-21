@@ -92,6 +92,8 @@ def computer_name(profile, machine, number):
 def check(profile):
     """List of problems that would make Windows Setup fail."""
     errs, seen = [], set()
+    if profile.get("edition") == "custom" and not re.fullmatch(r"[A-Za-z0-9]{5}(-[A-Za-z0-9]{5}){4}", profile.get("product_key", "").strip()):
+        errs.append("Serial must look like XXXXX-XXXXX-XXXXX-XXXXX-XXXXX (or choose No serial).")
     rows = profile.get("accounts", [])
     if not rows:
         errs.append("Add at least one account.")

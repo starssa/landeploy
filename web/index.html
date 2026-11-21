@@ -13,11 +13,14 @@ nav .logo{color:#fff;font-weight:700;font-size:18px;padding:4px 10px 18px;letter
 nav .logo span{color:#60a5fa}
 nav button{all:unset;cursor:pointer;padding:9px 12px;border-radius:8px;display:flex;gap:10px;align-items:center}
 nav button:hover{background:#1f2937}nav button.on{background:#1e3a8a;color:#fff}
+nav .grp{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#64748b;padding:16px 12px 4px}
+nav .grp:empty{padding:8px 0 0;border-bottom:1px solid #1f2937;margin:0 10px 6px}
 nav .foot{margin-top:auto;font-size:12px;color:#64748b;padding:10px}
 main{padding:26px 32px;max-width:1200px;width:100%}
 h1{font-size:22px;margin:0 0 4px}h2{font-size:16px;margin:22px 0 10px}.sub{color:var(--mute);margin:0 0 20px}
 .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px}
+a.card.link{text-decoration:none;color:inherit;display:block}a.card.link:hover{border-color:#93c5fd}
 .card .n{font-size:28px;font-weight:700}.card .l{color:var(--mute)}
 table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
 th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:middle}
@@ -51,7 +54,7 @@ pre{background:#0f172a;color:#e2e8f0;padding:14px;border-radius:10px;overflow:au
 .cmd .btn{white-space:nowrap}.tool{display:flex;gap:14px;align-items:center;padding:12px 0;border-bottom:1px solid var(--line)}.tool:last-child{border:none}.tool .ic{font-size:26px}
 .tabs{display:flex;gap:6px;margin-bottom:12px}.tabs button{border:1px solid var(--line);background:#fff;border-radius:99px;padding:6px 14px;cursor:pointer;font:inherit}.tabs button.on{background:var(--ink);color:#fff;border-color:var(--ink)}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-@media(max-width:800px){.app{grid-template-columns:1fr}nav{flex-direction:row;overflow:auto}nav .logo,nav .foot{display:none}main{padding:16px}.grid2{grid-template-columns:1fr}}
+@media(max-width:800px){.app{grid-template-columns:1fr}nav{flex-direction:row;overflow:auto}nav .logo,nav .foot,nav .grp{display:none}main{padding:16px}.grid2{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -60,10 +63,15 @@ pre{background:#0f172a;color:#e2e8f0;padding:14px;border-radius:10px;overflow:au
   <div class="logo">LAN<span>Deploy</span></div>
   <button data-v="home" class="on">🏠 Overview</button>
   <button data-v="pcs">💻 Computers</button>
+  <div class="grp">OS install</div>
   <button data-v="os">💿 OS library</button>
-  <button data-v="win">🪟 Windows setup</button>
-  <button data-v="sw">📦 Software</button>
-  <button data-v="tools">🧰 Agents &amp; tools</button>
+  <button data-v="win">🪟 Windows install config</button>
+  <button data-v="ipxe">🥾 iPXE network boot</button>
+  <div class="grp">Software install</div>
+  <button data-v="sw">📦 Packages</button>
+  <button data-v="agent">🤖 Install the agent</button>
+  <button data-v="gen">🧪 Command generator</button>
+  <div class="grp"></div>
   <button data-v="log">🕘 Activity</button>
   <button data-v="set">⚙️ Settings</button>
   <div class="foot" id="srv"></div>
@@ -101,7 +109,8 @@ const online = a => Date.now()/1000 - a.last_seen < 90;
 
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => { view=b.dataset.v; document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('on',x===b)); render(); });
 
-function render(){ $('#view').innerHTML = ({home, pcs, os, win, sw, tools, log, set})[view](); bind(); }
+function render(){ $('#view').innerHTML = ({home, pcs, os, win, ipxe, sw, agent, gen, log, set})[view](); bind(); }
+const go = v => document.querySelector(`nav [data-v=${v}]`).click();
 
 /* copy that also works on plain http:// LAN addresses (navigator.clipboard needs https) */
 function copyText(t){
@@ -124,23 +133,22 @@ function home(){
   const px = S.server.pxe || {}, pxeOff = !S.server.pxe_enabled || !Object.values(px).every(Boolean);
   return `<h1>Overview</h1><p class="sub">Network-boot any PC into an OS installer, and push software to PCs that run the agent.</p>
   ${pxeOff?`<div class="card" style="border-color:#fcd34d;background:#fffbeb;margin-bottom:14px">⚠️ <b>Network boot (OS install) is off.</b>
-    ${S.server.pxe_enabled?'LANDeploy could not open ports 67/69 — it needs <b>administrator rights</b>: close LANDeploy and start it again, then accept the password prompt. (Or another DHCP/TFTP server runs on this PC.)':'Started without network boot.'}
-    Software deployment works normally.</div>`:''}
+    PCs can't install an OS until it's on — <a href="#" data-go="ipxe">see why</a>. Software deployment works normally.</div>`:''}
   <div class="cards">
-    <div class="card"><div class="n">${ready.length}</div><div class="l">OS images ready</div></div>
-    <div class="card"><div class="n">${Object.keys(S.machines).length}</div><div class="l">Computers seen</div></div>
-    <div class="card"><div class="n">${Object.keys(S.assignments).length}</div><div class="l">OS installs scheduled</div></div>
-    <div class="card"><div class="n">${on.length}<span class="muted" style="font-size:16px"> / ${ag.length}</span></div><div class="l">Agents online</div></div>
+    <a class="card link" href="#" data-go="os"><div class="n">${ready.length}</div><div class="l">OS images ready</div></a>
+    <a class="card link" href="#" data-go="pcs"><div class="n">${Object.keys(S.machines).length}</div><div class="l">Computers</div></a>
+    <a class="card link" href="#" data-go="pcs"><div class="n">${Object.keys(S.assignments).length}</div><div class="l">OS installs scheduled</div></a>
+    <a class="card link" href="#" data-go="agent"><div class="n">${on.length}<span class="muted" style="font-size:16px"> / ${ag.length}</span></div><div class="l">Agents online</div></a>
   </div>
   <h2>Setup checklist</h2>
   <div class="card"><ul class="check-list" style="list-style:none;padding:0;margin:0">
-    ${step(!needBf.length, needBf.length?`Boot files missing: <span class="mono">${needBf.join(', ')}</span> — <a href="#" data-go="tools">download them in one click</a>`:'iPXE boot files installed')}
-    ${step(L.length, 'Add at least one ISO in <a href="#" data-go="os">OS library</a>')}
-    ${step(hasWin? true : null, 'Windows only: share the data folder over SMB — <a href="#" data-act="smb">show config</a>')}
-    ${step(ag.length, 'Install the agent on PCs to push software — <a href="#" data-act="agenthelp">how?</a>')}
-    ${step(Object.keys(S.machines).length, 'Network-boot a PC (F12 / boot menu → "Network" / "PXE") — it will appear in Computers')}
+    ${step(!needBf.length, needBf.length?'Download the network boot files — <a href="#" data-go="ipxe">iPXE network boot</a>':'Network boot files ready')}
+    ${step(L.length, 'Add your ISO files — <a href="#" data-go="os">OS library</a>')}
+    ${hasWin?step(null, 'Windows ISOs: share the data folder — <a href="#" data-go="ipxe">see iPXE network boot</a>'):''}
+    ${step(ag.length, 'Install the agent on PCs to push software — <a href="#" data-go="agent">Install the agent</a>')}
+    ${step(Object.keys(S.machines).length, 'Network-boot a PC (F12 → Network / PXE): it appears in <a href="#" data-go="pcs">Computers</a>')}
   </ul></div>
-  <h2>Recent activity</h2>${events(6)}`;
+  <h2>Recent activity</h2>${events(5)}`;
 }
 function events(n){ const E=S.events.slice(0,n); return E.length?`<table>${E.map(e=>`<tr><td class="muted" style="width:130px">${ago(e.t)}</td><td>${esc(e.msg)}</td></tr>`).join('')}</table>`:'<div class="card empty">Nothing yet.</div>'; }
 
@@ -151,50 +159,48 @@ function pcs(){
   const tr = (m, a) => { const as = m && S.assignments[m.mac], e = as && S.library[as.entry_id];
     const key = m ? 'm:'+m.mac : 'a:'+a.id;
     const stt = m ? m.status : a.status;
-    return `<tr><td style="width:32px"><input type="checkbox" class="sel" data-key="${key}" ${SEL.has(key)?'checked':''}></td><td style="width:150px">${statusPill(stt)}</td><td><b>${esc(m?.name || a?.hostname || 'Unnamed PC')}</b><div class="muted mono">${esc(m?.mac || a.macs[0] || '')}</div></td>
+    return `<tr><td style="width:32px"><input type="checkbox" class="sel" data-key="${key}" ${SEL.has(key)?'checked':''}></td><td style="width:150px">${statusPill(stt)}</td><td><b>${esc(m?.name || a?.hostname || 'Unnamed PC')}</b>${m?` <a href="#" class="muted" data-act="rename" data-mac="${m.mac}" title="Rename">✎</a>`:''}
+      <div class="muted"><span class="mono">${esc(m?.mac || a.macs[0] || '')}</span> · ${a ? (online(a)?'agent online':'agent offline') : 'no agent'}</div></td>
     <td>${m ? esc([m.manufacturer, m.product].filter(Boolean).join(' ') || '—') : '—'}<div class="muted">${esc(a? a.os : (m.platform||m.arch||''))}</div></td>
-    <td>${e ? `<span class="pill acc">${as.mode==='auto'?'Auto-install':'Ask on screen'}: ${esc(e.name)}</span>` : m?.state==='installing' ? `<span class="pill warn">Installing ${esc(m.last_deploy)}</span>` : '<span class="muted">—</span>'}</td>
-    <td>${a ? `<span class="pill ${online(a)?'ok':''}">${online(a)?'agent online':'agent offline'}</span>` : '<span class="muted">no agent</span>'}<div class="muted">${(a ? 'last report '+ago(a.last_seen) : 'seen '+ago(m.last_seen))}</div></td>
-    <td><div class="row">${m?`<button class="btn s p" data-act="osw" data-mac="${m.mac}">Deploy OS</button>`:''}
-      ${a?`<button class="btn s" data-act="sww" data-agent="${a.id}">Install software</button>`:''}
-      ${m?`<button class="btn s" data-act="wol" data-mac="${m.mac}" title="Wake-on-LAN">⏻</button><button class="btn s" data-act="rename" data-mac="${m.mac}">✎</button>`:''}
-      ${e?`<button class="btn s d" data-act="unassign" data-mac="${m.mac}">Cancel</button>`:''}
-      <button class="btn s d" data-act="rmpc" data-key="${key}" title="Remove from the list">🗑</button></div></td></tr>`; };
+    <td>${e ? `<span class="pill acc">${as.mode==='auto'?'Auto':'Ask'}: ${esc(e.name)}</span> <a href="#" class="muted" data-act="unassign" data-mac="${m.mac}" title="Cancel this install">✕</a>` : m?.state==='installing' ? `<span class="pill warn">Installing ${esc(m.last_deploy)}</span>` : '<span class="muted">—</span>'}</td>
+    <td><div class="row" style="justify-content:flex-end;flex-wrap:nowrap">${m?`<button class="btn s p" data-act="osw" data-mac="${m.mac}">Deploy OS</button>`:''}
+      ${a?`<button class="btn s" data-act="sww" data-agent="${a.id}">Software</button>`:''}
+      ${m?`<button class="btn s" data-act="wol" data-mac="${m.mac}" title="Wake-on-LAN (power on)">⏻</button>`:''}
+      <button class="btn s" data-act="rmpc" data-key="${key}" title="Remove from the list">🗑</button></div></td></tr>`; };
   const body = rows.map(m=>tr(m, agentByMac[m.mac])).concat(extra.map(a=>tr(null,a))).join('');
   const counts = {}; rows.forEach(m=>counts[m.status]=(counts[m.status]||0)+1); extra.forEach(a=>counts[a.status]=(counts[a.status]||0)+1);
   const chips = Object.keys(STATUS).filter(k=>counts[k]).map(k=>`${statusPill(k)} <b style="margin-right:10px">${counts[k]}</b>`).join('');
-  return `<div class="row"><div><h1>Computers</h1><p class="sub">PCs appear here after their first network boot, or when the agent registers. Status updates live.</p></div><div class="sp"></div>
-    <button class="btn" data-act="addpc">+ Add by MAC address</button><button class="btn p" data-act="osw">Deploy OS…</button></div>
-    ${chips?`<div class="row" style="margin-bottom:12px">${chips}<span class="muted" title="Network boot and install come from LANDeploy itself; On = the agent reports, the PC answers ping, or it just asked the network for an address">ⓘ how is this detected?</span></div>`:''}
+  return `<div class="row"><div><h1>Computers</h1><p class="sub">PCs appear here after their first network boot, or when the agent registers. Tick several to act on them together.</p></div><div class="sp"></div>
+    <button class="btn" data-act="addpc">+ Add by MAC</button></div>
+    ${chips?`<div class="row" style="margin-bottom:12px">${chips}<span class="muted" title="On = the agent reports, the PC answers ping, or it just asked the network for an address">ⓘ</span></div>`:''}
     <div class="card row" id="bulk" style="margin-bottom:12px;${SEL.size?'':'display:none'}"><b id="bulkn">${SEL.size} selected</b><div class="sp"></div>
-      <button class="btn p" data-act="bulkos">Deploy OS to selected</button><button class="btn" data-act="bulksw">Install software on selected</button>
-      <button class="btn" data-act="bulkwol">⏻ Wake selected</button><button class="btn d" data-act="bulkrm">🗑 Remove selected</button><button class="btn" data-act="bulkclear">Clear</button></div>
-    ${body?`<table><tr><th><input type="checkbox" id="selall"></th><th>Status</th><th>Computer</th><th>Hardware / OS</th><th>Scheduled</th><th>Agent</th><th></th></tr>${body}</table>`:'<div class="card empty">No computers yet. Boot a PC from the network (usually F12 → "PXE / Network boot"), or install the agent.</div>'}`;
+      <button class="btn p" data-act="bulkos">Deploy OS</button><button class="btn" data-act="bulksw">Install software</button>
+      <button class="btn" data-act="bulkwol">⏻ Wake</button><button class="btn d" data-act="bulkrm">🗑 Remove</button><button class="btn" data-act="bulkclear">Clear</button></div>
+    ${body?`<table><tr><th><input type="checkbox" id="selall"></th><th>Status</th><th>Computer</th><th>Hardware / OS</th><th>Scheduled</th><th></th></tr>${body}</table>`:'<div class="card empty">No computers yet. Boot a PC from the network (usually F12 → "PXE / Network boot"), or install the agent.</div>'}`;
 }
 
 function os(){
   const L = Object.values(S.library).sort((a,b)=>a.name.localeCompare(b.name));
   const st = e => e.status==='ready'?`<span class="pill ok">ready</span> ${e.mode==='mount'?'<span class="pill acc" title="Mounted from the ISO, no copy on disk">mounted</span>':'<span class="pill" title="Files copied to disk">extracted</span>'}`:e.status.startsWith('error')?`<span class="pill bad" title="${esc(e.status)}">error</span>`:`<span class="pill warn">${esc(e.status)}…</span>`;
-  return `<h1>OS library</h1><p class="sub">Drop ISO files here (or copy them into <span class="mono">${esc(S.server.data_dir)}/isos</span> and click Rescan). LANDeploy prepares them and figures out how to boot them over the network.</p>
-  <div class="card" style="margin-bottom:12px;display:flex;flex-direction:column;gap:8px"><b>Prepare new ISOs by</b>
-    <label class="check" style="margin:0"><input type="radio" name="isomode" value="mount" ${S.settings.iso_mode!=='extract'?'checked':''}> <span><b>Mounting</b> <span class="muted">— no copy, no extra disk space; replacing the ISO updates it (needs admin rights)</span></span></label>
-    <label class="check" style="margin:0"><input type="radio" name="isomode" value="extract" ${S.settings.iso_mode==='extract'?'checked':''}> <span><b>Extracting</b> <span class="muted">— copies the files (uses as much space again)</span></span></label></div>
+  return `<h1>OS library</h1><p class="sub">Official or custom ISOs. You can also copy them into <span class="mono">${esc(S.server.data_dir)}/isos</span> and click Rescan.</p>
   <div class="drop" id="dropIso">⬆️ <b>Drop ISO files here</b> or click to choose<div class="bar" hidden><i></i></div><input type="file" accept=".iso" multiple hidden></div>
-  <div class="row" style="margin:14px 0"><div class="sp"></div><button class="btn" data-act="rescan">↻ Rescan folder</button></div>
+  <div class="row" style="margin:14px 0"><span class="muted">New ISOs are</span>
+    <select id="isomode" style="width:auto"><option value="mount" ${S.settings.iso_mode!=='extract'?'selected':''}>mounted — no copy, no extra disk space</option><option value="extract" ${S.settings.iso_mode==='extract'?'selected':''}>extracted — files copied to disk</option></select>
+    <div class="sp"></div><button class="btn" data-act="rescan">↻ Rescan folder</button></div>
   ${L.length?`<table><tr><th>Name</th><th>Type</th><th>Size</th><th>Status</th><th></th></tr>${L.map(e=>`<tr>
     <td><b>${esc(e.name)}</b><div class="muted mono">${esc(e.iso)}</div></td>
     <td>${e.boot?.type?`<span class="pill">${TYPES[e.boot.type]}</span>`:'—'}</td><td>${size(e.size)}</td><td>${st(e)} ${e.enabled?'':'<span class="pill">hidden</span>'}</td>
     <td><div class="row"><button class="btn s" data-act="edit" data-id="${e.id}">Options</button><button class="btn s" data-act="prep" data-id="${e.id}" title="Prepare again (e.g. after replacing the ISO file)">↻ Refresh</button><button class="btn s d" data-act="del" data-id="${e.id}">Delete</button></div></td></tr>`).join('')}</table>`:'<div class="card empty">No ISOs yet.</div>'}
-  <h2>What works</h2><div class="card muted">
+  <details style="margin-top:18px"><summary class="muted">Which ISOs work?</summary><div class="card muted" style="margin-top:8px">
   <b>Windows 10/11</b>: boots the ISO's WinPE with wimboot, then runs Setup from the SMB share (optionally unattended). ·
   <b>Ubuntu</b>: live/installer over HTTP, optional autoinstall. · <b>Fedora/RHEL/Alma/Rocky</b>: live or Anaconda (inst.repo), optional kickstart. ·
-  <b>Arch Linux</b>, <b>Debian live</b>: over HTTP. · <b>Anything else</b>: raw ISO via iPXE sanboot (best on BIOS, small ISOs).</div>`;
+  <b>Arch Linux</b>, <b>Debian live</b>: over HTTP. · <b>Anything else</b>: raw ISO via iPXE sanboot (best on BIOS, small ISOs).</div></details>`;
 }
 
 function sw(){
   const P = Object.values(S.packages), J = Object.values(S.jobs).sort((a,b)=>b.created-a.created).slice(0,30);
   const cls = {success:'ok',failed:'bad',denied:'bad',cancelled:'',pending:'acc',asking:'warn',running:'warn'};
-  return `<div class="row"><div><h1>Software</h1><p class="sub">Packages are pushed to PCs running the agent. By default the user is asked for permission first.</p></div><div class="sp"></div><button class="btn p" data-act="newpkg">+ New package</button></div>
+  return `<div class="row"><div><h1>Packages</h1><p class="sub">Software to push to PCs that run the agent. By default the user is asked first. Build commands with the <a href="#" data-go="gen">Command generator</a>.</p></div><div class="sp"></div><button class="btn p" data-act="newpkg">+ New package</button></div>
   ${P.length?`<table><tr><th>Package</th><th>Installer</th><th>Consent</th><th></th></tr>${P.map(p=>`<tr><td><b>${esc(p.name)}</b><div class="muted">${esc(p.os||'any')}</div></td>
     <td class="mono">${p.command?esc(p.command):p.file?esc(p.file)+' '+esc(p.args||'')+` <span class="muted">(${size(p.size)})</span>`:'<span class="pill bad">no file</span>'}</td>
     <td>${p.consent===false?'<span class="pill warn">silent</span>':'<span class="pill ok">asks user</span>'} ${p.run_as==='user'?'<span class="pill acc">per-user</span>':''}</td>
@@ -205,70 +211,67 @@ function sw(){
     <td>${['pending','asking'].includes(j.status)?`<button class="btn s d" data-act="canceljob" data-id="${j.id}">Cancel</button>`:''}</td></tr>`).join('')}</table>`:'<div class="card empty">No deployments yet.</div>'}`;
 }
 
-function tools(){
-  const T = S.tools, b = S.server.base, tok = S.settings.agent_token;
-  const stat = x => x.state==='running' ? `<span class="pill warn">⏳ ${esc(x.msg)}</span>` : x.state==='error' ? `<span class="pill bad" title="${esc(x.msg)}">error: ${esc(x.msg).slice(0,80)}</span>` : x.present ? '<span class="pill ok">✓ ready</span>' : '<span class="pill">not downloaded</span>';
-  const row = (key, ic, title, desc, extra) => { const x = T[key]; return `<div class="tool"><div class="ic">${ic}</div><div class="sp"><b>${title}</b> ${x.version?`<span class="muted">${esc(x.version==='uploaded'?'uploaded':'v'+x.version)}${x.size?' · '+size(x.size):''}</span>`:''}<div class="muted">${desc}</div><div style="margin-top:4px">${stat(x)}</div></div>
-    <div class="row">${extra||''}<button class="btn ${x.present?'':'p'}" data-act="fetchtool" data-what="${key}" ${x.state==='running'?'disabled':''}>${x.present?'↻ Update':'⬇ Download'}</button></div></div>`; };
+function ipxe(){
+  const T = S.tools, x = T.bootfiles, px = S.server.pxe || {};
+  const on = S.server.pxe_enabled && Object.values(px).length && Object.values(px).every(Boolean);
+  const stat = x.state==='running' ? `<span class="pill warn">⏳ ${esc(x.msg)}</span>` : x.state==='error' ? `<span class="pill bad">${esc(x.msg).slice(0,120)}</span>` : x.present ? '<span class="pill ok">✓ ready</span>' : '<span class="pill warn">missing</span>';
+  const hasWin = Object.values(S.library).some(e=>e.boot?.type==='windows');
+  return `<h1>iPXE network boot</h1><p class="sub">What client PCs need to start an OS installer from the network.</p>
+  <div class="card">
+    <div class="tool"><div class="ic">${on?'🟢':'🔴'}</div><div class="sp"><b>Network boot service</b> ${on?'<span class="pill ok">on</span>':'<span class="pill bad">off</span>'}
+      <div class="muted">${on ? `Answering PCs that network-boot, on ports 67 · 69 · 4011 (server ${esc(S.server.ip)}).`
+        : S.server.pxe_enabled ? 'Could not open ports 67/69. Close LANDeploy and start it again, accepting the administrator prompt — or another DHCP/TFTP server runs on this PC.'
+        : 'LANDeploy was started without network boot.'}</div></div></div>
+    <div class="tool"><div class="ic">🥾</div><div class="sp"><b>iPXE boot files</b> ${stat}
+      <div class="muted">Small programs sent to each PC when it network-boots (BIOS, UEFI and Windows). Downloaded once.${x.missing.length?` Missing: <span class="mono">${x.missing.join(', ')}</span>`:''}</div></div>
+      <button class="btn ${x.present?'':'p'}" data-act="fetchtool" data-what="bootfiles" ${x.state==='running'?'disabled':''}>${x.present?'↻ Update':'⬇ Download'}</button></div>
+    ${hasWin?`<div class="tool"><div class="ic">📁</div><div class="sp"><b>Shared folder for Windows ISOs</b>
+      <div class="muted">Windows Setup reads its files from this server over SMB: set up the share once.</div></div>
+      <button class="btn" data-act="smb">Show setup</button></div>`:''}
+  </div>
+  <details style="margin-top:18px"><summary class="muted">A PC stays on "DHCP…" or says "No boot filename"?</summary><div class="card muted" style="margin-top:8px">
+    The PC and this server must be on the <b>same wired network</b>, with a router that gives out IP addresses (LANDeploy doesn't).
+    The server's firewall must allow UDP 67, 69 and 4011. In BIOS/UEFI, enable network boot and turn off Secure Boot on the client.</div></details>`;
+}
+
+function agent(){
+  const b = S.server.base, tok = S.settings.agent_token, A = S.tools.agents;
   const winOne = `powershell -NoProfile -ExecutionPolicy Bypass -Command "irm '${b}/setup.ps1?t=${tok}' | iex"`;
   const linOne = `wget -qO- "${b}/setup.sh?t=${tok}" | sudo sh`;
-  const g = genCommand();
-  return `<h1>Agents &amp; tools</h1><p class="sub">Everything the client PCs need is handed out by this server over the LAN, so client PCs need neither Python nor Internet access.</p>
-
-  <h2>1 · Server tools</h2>
-  <div class="card">
-    ${row('bootfiles','🥾','iPXE network boot files','undionly.kpxe (BIOS), snponly.efi / ipxe.efi (UEFI), wimboot (Windows). Required for OS deployment.'+(T.bootfiles.missing.length?` Missing: <span class="mono">${T.bootfiles.missing.join(', ')}</span>`:''))}
-    ${agentsRow(T.agents, b)}
-  </div>
-
-  <h2>2 · Install the agent on client PCs</h2>
+  const missing = osTab==='win' ? !A['windows-x64'].present : !(A['linux-x64'].present && A['linux-arm64'].present);
+  return `<h1>Install the agent</h1><p class="sub">Run once on each client PC. Then you can push software to it, and its status shows in Computers. No Python or Internet needed on the PC.</p>
   <div class="card">
     <div class="tabs"><button data-ostab="win" class="${osTab==='win'?'on':''}">🪟 Windows</button><button data-ostab="lin" class="${osTab==='lin'?'on':''}">🐧 Linux</button></div>
+    ${missing?'<p><span class="pill warn">The agent program for this system is missing from this LANDeploy. Use a release build.</span></p>':''}
     ${osTab==='win' ? `
-      ${T.agents['windows-x64'].present?'':'<p><span class="pill warn">This server has no Windows agent program (it comes with the release builds of LANDeploy).</span></p>'}
-      <b>Option A: download and double-click</b> <span class="muted">(easiest with a USB stick or a browser on the PC)</span>
-      <div class="row" style="margin:8px 0 14px"><a class="btn p" href="${b}/setup.cmd?t=${tok}">⬇ LANDeploy-Agent-Setup.cmd</a><span class="muted">On the PC: right-click → <b>Run as administrator</b>.</span></div>
-      <b>Option B: paste one line</b> <span class="muted">in an <b>administrator</b> PowerShell or Command Prompt on the PC</span>
+      <b>1. Download and run</b> <span class="muted">— on the PC: right-click → Run as administrator</span>
+      <div class="row" style="margin:8px 0 16px"><a class="btn p" href="${b}/setup.cmd?t=${tok}">⬇ LANDeploy-Agent-Setup.cmd</a></div>
+      <b>or 2. Paste one line</b> <span class="muted">— in an administrator PowerShell</span>
       ${cmdBox(winOne)}
-      <p class="muted">Copies the agent program (no Python needed) into <span class="mono">C:\\ProgramData\\LANDeploy-Agent</span> and starts it in the background at every boot (scheduled task "LANDeploy", runs as SYSTEM). Users see the "Allow installation?" prompt on their desktop, even without admin rights.</p>
-      <details><summary class="muted">Uninstall / troubleshoot</summary>
-        ${cmdBox('schtasks /end /tn LANDeploy & schtasks /delete /tn LANDeploy /f & rmdir /s /q %ProgramData%\\LANDeploy-Agent','Copy uninstall')}
-        ${cmdBox(`curl.exe -I ${b}/agent/bin/landeploy-agent-windows-x64.exe`,'Copy connection test')}</details>`
+      <details style="margin-top:12px"><summary class="muted">Uninstall</summary>${cmdBox('schtasks /end /tn LANDeploy & schtasks /delete /tn LANDeploy /f & rmdir /s /q %ProgramData%\\LANDeploy-Agent','Copy')}</details>`
     : `
-      <b>Paste one line</b> in a terminal on the PC (Ubuntu, Debian, Fedora, Arch…)
+      <b>Paste one line</b> <span class="muted">— in a terminal on the PC (Ubuntu, Debian, Fedora, Arch…)</span>
       ${cmdBox(linOne)}
-      <div class="row" style="margin:6px 0"><a class="btn" href="${b}/setup.sh?t=${tok}">⬇ setup.sh</a><span class="muted">or download it and run <span class="mono">sudo sh setup.sh</span></span></div>
-      <p class="muted">Copies the agent program (no Python needed) to <span class="mono">/opt/landeploy-agent</span> and runs it as a systemd service, plus zenity for the consent prompt.</p>
-      <details><summary class="muted">Uninstall / status</summary>
-        ${cmdBox('sudo systemctl disable --now landeploy-agent && sudo rm -rf /opt/landeploy-agent /var/lib/landeploy-agent /etc/systemd/system/landeploy-agent.service','Copy uninstall')}
-        ${cmdBox('systemctl status landeploy-agent','Copy status')}</details>`}
-    <p class="muted" style="margin-bottom:0">Agent token: <span class="mono">${esc(tok)}</span> (already included in the commands above; change it in Settings).</p>
-  </div>
-
-  <h2>3 · Software command generator</h2>
-  <div class="card">
-    <div class="tabs">${[['winget','🪟 winget'],['apt','🐧 apt'],['snap','snap'],['flatpak','flatpak'],['switch','Installer switches']].map(([k,l])=>`<button data-gen="${k}" class="${GEN.type===k?'on':''}">${l}</button>`).join('')}</div>
-    <div class="grid2"><div><label>${GEN.type==='winget'?'winget package ID':GEN.type==='flatpak'?'Flatpak app ID':GEN.type==='switch'?'Installer type':'Package name'}</label>
-      ${GEN.type==='switch' ? `<select id="gid">${Object.keys(PRESETS).filter(Boolean).map(k=>`<option ${GEN.id===k?'selected':''}>${k}</option>`).join('')}</select>`
-        : `<input id="gid" class="mono" value="${esc(GEN.id)}" placeholder="${({winget:'Google.AntigravityIDE',apt:'vlc',snap:'code --classic',flatpak:'org.videolan.VLC'})[GEN.type]}">`}</div>
-      <div><label>Find IDs</label><div class="muted" style="padding-top:8px">${({winget:'<a target="_blank" href="https://winstall.app">winstall.app</a> or <span class="mono">winget search name</span>',apt:'<a target="_blank" href="https://packages.ubuntu.com">packages.ubuntu.com</a>',snap:'<a target="_blank" href="https://snapcraft.io/store">snapcraft.io</a>',flatpak:'<a target="_blank" href="https://flathub.org">flathub.org</a>',switch:'Paste into the package\'s "Silent switches" field'})[GEN.type]}</div></div></div>
-    ${GEN.type==='winget'?`<div class="row" style="margin-top:10px"><label class="check"><input type="checkbox" id="gsilent" ${GEN.silent?'checked':''}> silent</label><label class="check"><input type="checkbox" id="gaccept" ${GEN.accept?'checked':''}> accept agreements (needed unattended)</label><label class="check"><input type="checkbox" id="gmachine" ${GEN.machine?'checked':''}> for all users (--scope machine)</label></div>
-      <label class="check"><input type="checkbox" id="gperuser" ${GEN.peruser?'checked':''}> <b>Per-user app</b>: run as the logged-in user</label>
-      <div class="muted" style="margin-left:24px">Tick this when the app only installs per user. Check with <span class="mono">winget show --id ${esc(GEN.id||'ID')}</span>: if it says <b>Scope: user</b> (e.g. Google.AntigravityIDE), tick it. Otherwise the app ends up hidden in the SYSTEM account.</div>`:''}
-    <label>Command</label>${g ? cmdBox(g) : '<div class="muted">Type an ID above.</div>'}
-    ${g && GEN.type!=='switch' ? `<div class="row"><button class="btn p" data-act="genpkg">📦 Create package from this command</button></div>`:''}
+      <details style="margin-top:12px"><summary class="muted">Uninstall</summary>${cmdBox('sudo systemctl disable --now landeploy-agent && sudo rm -rf /opt/landeploy-agent /var/lib/landeploy-agent /etc/systemd/system/landeploy-agent.service','Copy')}</details>`}
   </div>`;
 }
-function agentsRow(A, b){
-  const names = {'windows-x64':'Windows 10/11', 'linux-x64':'Linux x64', 'linux-arm64':'Linux ARM64'};
-  const all = Object.values(A).every(x=>x.present);
-  return `<div class="tool"><div class="ic">🤖</div><div class="sp"><b>Agent programs for client PCs</b> <span class="muted">— standalone, no Python needed</span>
-    <div class="muted">Included with LANDeploy; the setup commands below install them on the PCs.</div>
-    <div class="row" style="margin-top:6px">${Object.entries(A).map(([k,x]) => x.present
-      ? `<a class="pill ok" style="text-decoration:none" href="${b}/agent/bin/${x.file}">✓ ${names[k]} · ${size(x.size)}</a>`
-      : `<span class="pill">✗ ${names[k]}</span>`).join(' ')}</div>
-    ${all?'':'<div class="muted" style="margin-top:6px">Missing programs come with the <a target="_blank" href="https://github.com/starssa/landeploy/releases/latest">release builds</a>. Running from source? Build one with <span class="mono">python build.py agent</span>.</div>'}
-  </div></div>`;
+
+function gen(){
+  const g = genCommand();
+  return `<h1>Command generator</h1><p class="sub">Build the install command for an app, then turn it into a package in one click.</p>
+  <div class="card">
+    <div class="tabs">${[['winget','🪟 winget'],['apt','🐧 apt'],['snap','snap'],['flatpak','flatpak'],['switch','Installer switches']].map(([k,l])=>`<button data-gen="${k}" class="${GEN.type===k?'on':''}">${l}</button>`).join('')}</div>
+    <label>${GEN.type==='winget'?'winget package ID':GEN.type==='flatpak'?'Flatpak app ID':GEN.type==='switch'?'Installer type':'Package name'}
+      <small>— find it on ${({winget:'<a target="_blank" href="https://winstall.app">winstall.app</a>',apt:'<a target="_blank" href="https://packages.ubuntu.com">packages.ubuntu.com</a>',snap:'<a target="_blank" href="https://snapcraft.io/store">snapcraft.io</a>',flatpak:'<a target="_blank" href="https://flathub.org">flathub.org</a>',switch:'the installer\'s documentation'})[GEN.type]}</small></label>
+    ${GEN.type==='switch' ? `<select id="gid">${Object.keys(PRESETS).filter(Boolean).map(k=>`<option ${GEN.id===k?'selected':''}>${k}</option>`).join('')}</select>`
+      : `<input id="gid" class="mono" value="${esc(GEN.id)}" placeholder="${({winget:'Google.AntigravityIDE',apt:'vlc',snap:'code --classic',flatpak:'org.videolan.VLC'})[GEN.type]}">`}
+    ${GEN.type==='winget'?`<div class="row" style="margin-top:10px"><label class="check"><input type="checkbox" id="gperuser" ${GEN.peruser?'checked':''}> <b>Per-user app</b></label>
+      <span class="muted">tick when <span class="mono">winget show</span> says <b>Scope: user</b> (e.g. Antigravity IDE), so it installs into the logged-in user's account</span></div>
+      <details><summary class="muted">More options</summary><div class="row" style="margin-top:6px"><label class="check"><input type="checkbox" id="gsilent" ${GEN.silent?'checked':''}> silent</label><label class="check"><input type="checkbox" id="gaccept" ${GEN.accept?'checked':''}> accept agreements</label><label class="check"><input type="checkbox" id="gmachine" ${GEN.machine?'checked':''}> for all users (--scope machine)</label></div></details>`:''}
+    <label>Command</label>${g ? cmdBox(g) : '<div class="muted">Type an ID above.</div>'}
+    ${g && GEN.type!=='switch' ? `<div class="row"><button class="btn p" data-act="genpkg">📦 Create package</button></div>`:''}
+    ${GEN.type==='switch'?'<p class="muted">Paste these into a package\'s "Silent switches" field.</p>':''}
+  </div>`;
 }
 function genCommand(){
   const id = (GEN.id||'').trim(); if(!id) return '';
@@ -292,7 +295,7 @@ function win(){
   const names = P.accounts.flatMap(accNames);
   const pcs = Array.from({length:3},(_,i)=>(P.pc_prefix||'')+sfx(P.pc_suffix,(+P.pc_start||1)-1+i));
   const wins = Object.values(S.library).filter(e=>e.boot?.type==='windows');
-  return `<div class="row"><div><h1>Windows setup</h1><p class="sub">One set of answers for <b>every Windows ISO</b>: language, accounts, computer names… Each PC gets its own answer file when it starts installing.</p></div><div class="sp"></div>
+  return `<div class="row"><div><h1>Windows install config</h1><p class="sub">One set of answers for <b>every Windows ISO</b>: language, accounts, computer names… Each PC gets its own answer file when it starts installing.</p></div><div class="sp"></div>
     <button class="btn" data-act="wpreview">👁 Preview answer file</button><button class="btn p" data-act="wsave">${WPD?'💾 Save changes':'Saved ✓'}</button></div>
   <div class="card" style="margin-bottom:14px"><label class="check" style="margin:0;font-size:15px"><input type="checkbox" data-w="enabled" ${P.enabled?'checked':''}> <b>Use these settings for Windows installs</b></label>
     <div class="muted" style="margin-left:24px">${wins.length} Windows ISO(s) in the library. An ISO can still use its own XML or none: OS library → Options → Answer file.</div>
@@ -324,8 +327,13 @@ function win(){
       <span class="mono">→ ${pcs.map(n=>esc(n.toUpperCase().slice(0,15))).join(', ')}…</span></div>`:''}
     <label class="check"><input type="radio" name="wpc" value="random" ${P.computer_names==='random'?'checked':''}> Let Windows choose (DESKTOP-XXXXXXX)</label></div>
   <h2>Installation</h2><div class="card"><div class="grid2">
-    <div><label>Edition</label><select data-w="edition">${opt({pro:'Windows Pro', home:'Windows Home', education:'Windows Education', ask:'Ask during setup', custom:'My product key…'}, P.edition)}</select>
-      ${P.edition==='custom'?`<input data-w="product_key" class="mono" value="${esc(P.product_key)}" placeholder="XXXXX-XXXXX-XXXXX-XXXXX-XXXXX" style="margin-top:6px">`:'<div class="muted" style="margin-top:4px">Generic key: picks the edition, does not activate Windows.</div>'}</div><div></div></div>
+    <div><label>Serial (product key)</label>
+      <label class="check"><input type="radio" name="wkey" value="ask" ${P.edition==='ask'?'checked':''}> <span><b>No serial</b> <span class="muted">— Setup asks at the PC (choose "I don't have a product key" to activate later)</span></span></label>
+      <label class="check"><input type="radio" name="wkey" value="generic" ${['pro','home','education'].includes(P.edition)?'checked':''}> <span><b>Generic key</b> <span class="muted">— only picks the edition, Windows stays <b>not activated</b></span></span></label>
+      ${['pro','home','education'].includes(P.edition)?`<div style="margin:2px 0 6px 24px"><select data-w="edition" style="width:auto">${opt({pro:'Windows Pro', home:'Windows Home', education:'Windows Education'}, P.edition)}</select></div>`:''}
+      <label class="check"><input type="radio" name="wkey" value="custom" ${P.edition==='custom'?'checked':''}> <span><b>My serial</b> <span class="muted">— activates Windows (volume/MAK key for many PCs)</span></span></label>
+      ${P.edition==='custom'?`<input data-w="product_key" class="mono" value="${esc(P.product_key)}" placeholder="XXXXX-XXXXX-XXXXX-XXXXX-XXXXX" style="margin:2px 0 0 24px;max-width:420px">`:''}
+    </div><div></div></div>
     <label class="check" style="margin-top:12px"><input type="checkbox" data-w="skip_oobe" ${P.skip_oobe?'checked':''}> Skip the Microsoft-account, Wi-Fi and privacy screens</label>
     <label class="check"><input type="checkbox" data-w="bypass_requirements" ${P.bypass_requirements?'checked':''}> Install on PCs without TPM 2.0 / Secure Boot / 4 GB RAM (older PCs)</label>
     <label class="check"><input type="checkbox" data-w="wipe_disk" ${P.wipe_disk?'checked':''}> <b style="color:var(--bad)">Erase the first disk and install without asking</b></label>
@@ -411,7 +419,7 @@ function osWizard(macs){
 
 function swWizard(pkgId, agentIds){
   const P = Object.values(S.packages).filter(p=>p.file||p.command), A = Object.values(S.agents);
-  if(!P.length) return toast('Create a package first'); if(!A.length){ toast('No agent yet: install it on the PCs first'); return document.querySelector('nav [data-v=tools]').click(); }
+  if(!P.length) return toast('Create a package first'); if(!A.length){ toast('No agent yet: install it on the PCs first'); return go('agent'); }
   const w = {pkg:pkgId||null, agents:new Set(agentIds||[])};
   const draw = () => dlg(`<h3>Install software</h3><p class="muted">All selected PCs receive the job within ~20 s and install in parallel.</p>
     <label>Package</label>${P.map(p=>`<div class="choice ${w.pkg===p.id?'on':''}" data-pkg="${p.id}">📦<div><b>${esc(p.name)}</b><span class="muted">${p.consent===false?'silent install':'user will be asked to allow it'}</span></div></div>`).join('')}
@@ -482,8 +490,10 @@ function bind(){
     if(k==='language'){ const kb = S.win_options.languages[el.value]?.[1]; if(kb) D.keyboard = kb; } render(); });
   document.querySelectorAll('[data-a]').forEach(el=>el.onchange=()=>{ const [i,k]=el.dataset.a.split(':'), r=wpDraft().accounts[+i];
     r[k] = el.type==='checkbox' ? el.checked : k==='count' ? Math.max(1,+el.value||1) : el.value; render(); });
+  document.querySelectorAll('input[name=wkey]').forEach(el=>el.onchange=()=>{ const D=wpDraft();
+    D.edition = el.value==='generic' ? (['pro','home','education'].includes(D.edition)?D.edition:'pro') : el.value; render(); });
   document.querySelectorAll('input[name=wpc]').forEach(el=>el.onchange=()=>{ wpDraft().computer_names = el.value; render(); });
-  document.querySelectorAll('input[name=isomode]').forEach(r=>r.onchange=async()=>{ await api('/api/settings',{iso_mode:r.value}); toast(r.value==='mount'?'New ISOs will be mounted':'New ISOs will be extracted'); load(); });
+  if($('#isomode')) $('#isomode').onchange = async e => { await api('/api/settings',{iso_mode:e.target.value}); toast(e.target.value==='mount'?'New ISOs will be mounted':'New ISOs will be extracted'); load(); };
   document.querySelectorAll('[data-copy]').forEach(b=>b.onclick=()=>copyText(b.dataset.copy));
   document.querySelectorAll('[data-ostab]').forEach(b=>b.onclick=()=>{ osTab=b.dataset.ostab; render(); });
   document.querySelectorAll('[data-gen]').forEach(b=>b.onclick=()=>{ GEN.type=b.dataset.gen; GEN.id = GEN.type==='switch' ? Object.keys(PRESETS)[1] : ''; render(); });
@@ -509,7 +519,7 @@ function bind(){
           const hasAgent = keys.some(k => k[0]==='a' || Object.values(S.agents).some(a=>a.macs.includes(k.slice(2))));
           if(!confirm(`Remove ${list.length>3 ? list.length+' computers' : list.join(', ')} from the list?\n\n`
              + `Its scheduled OS install and pending software are cancelled. Nothing is changed on the PC itself.`
-             + (hasAgent ? `\n\nA PC whose agent is still installed comes back at its next report: uninstall the agent first (Agents & tools) to remove it for good.` : `\n\nIt comes back if it network-boots again.`))) return;
+             + (hasAgent ? `\n\nA PC whose agent is still installed comes back at its next report: uninstall the agent first (Install the agent page) to remove it for good.` : `\n\nIt comes back if it network-boots again.`))) return;
           const r = await api('/api/computers/remove', {macs: keys.filter(k=>k[0]==='m').map(k=>k.slice(2)), agents: keys.filter(k=>k[0]==='a').map(k=>k.slice(2))});
           keys.forEach(k=>SEL.delete(k)); toast(`${r.removed} computer(s) removed`); return load(); }
       case 'wuseall': for(const e of Object.values(S.library).filter(e=>e.boot?.type==='windows')) await api(`/api/library/${e.id}/update`,{answer:'profile'}); toast('All Windows ISOs use this page'); return load();
@@ -536,7 +546,7 @@ function bind(){
       case 'canceljob': await api(`/api/jobs/${d.id}/cancel`,{}); return load();
       case 'clearlog': await api('/api/events/clear',{}); return load();
       case 'smb': { const t = await (await fetch('/api/smbconf')).text(); return dlg(`<h3>SMB share for Windows installs</h3><p class="muted">WinPE maps this share and runs setup.exe from it.</p><pre>${esc(t)}</pre><div class="foot"><button class="btn p" onclick="closeDlg()">OK</button></div>`); }
-      case 'agenthelp': return document.querySelector('nav [data-v=tools]').click();
+      case 'agenthelp': return go('agent');
       case 'saveset': { const b={}; ['server_ip','http_port','default_action','menu_timeout','auto_delay','confirm_timeout','smb_share','smb_user','smb_pass','agent_token','admin_password'].forEach(k=>b[k]=$('#s_'+k).value);
         ['http_port','menu_timeout','auto_delay','confirm_timeout'].forEach(k=>b[k]=parseInt(b[k])||0); b.proxy_dhcp=$('#s_proxy_dhcp').checked; b.tftp=$('#s_tftp').checked;
         await api('/api/settings', b); toast('Saved'); return load(); }
