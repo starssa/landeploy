@@ -199,7 +199,7 @@ TYPE_LABELS = {"windows": "Windows Setup (WinPE + SMB)", "arch": "Arch Linux", "
 
 
 # ---------------------------------------------------------------- iPXE scripts
-def boot_script(entry, base, mac):
+def boot_script(entry, base, mac, drivers=()):
     """iPXE script that boots one library entry. base = http://ip:port"""
     eid, info = entry["id"], entry.get("boot", {})
     files = f"{base}/files/{eid}"
@@ -216,6 +216,8 @@ def boot_script(entry, base, mac):
         lines = [head, f"kernel {base}/bootfiles/wimboot gui\n",
                  f"initrd {base}/winpe/{eid}/winpeshl.ini winpeshl.ini\n",
                  f"initrd {base}/winpe/{eid}/install.cmd?mac={mac} install.cmd\n"]
+        # extra network/storage drivers for Windows PE: wimboot copies them into X:\Windows\System32
+        lines += [f"initrd {base}/winpe-drivers/{d} {d}\n" for d in drivers]
         if info.get("bootmgr"):
             lines.append(f"iseq ${{platform}} pcbios && initrd {files}/{info['bootmgr']} bootmgr ||\n")
         lines += [f"initrd {files}/{info['bcd']} BCD\n", f"initrd {files}/{info['sdi']} boot.sdi\n",
@@ -237,21 +239,52 @@ def boot_script(entry, base, mac):
     return head + f"sanboot --no-describe {iso}\n"
 
 
-def winpe_files(entry, settings, server_ip, answer_file=None):
+def winpe_files(entry, settings, server_ip, answer_file=None, drivers=()):
     share = settings.get("smb_share", "landeploy")
     user, pw = settings.get("smb_user") or "guest", settings.get("smb_pass") or ""
     unattend = f" /unattend:Z:\\unattend\\{answer_file}" if answer_file else ""
     folder = "mnt" if entry.get("mode") == "mount" else "library"     # mounted ISO or extracted copy
     winpeshl = '[LaunchApps]\r\n"install.cmd"\r\n'
-    cmd = ("@echo off\r\n"
-           "title LANDeploy - Windows network install\r\n"
-           "wpeinit\r\n"
-           "echo Waiting for network...\r\n"
-           f":retry\r\nping -n 3 {server_ip} >nul || goto retry\r\n"
-           f"net use Z: \\\\{server_ip}\\{share} /user:{user} \"{pw}\" || (echo SMB share not reachable & pause & goto retry)\r\n"
-           f"Z:\\{folder}\\{entry['id']}\\setup.exe{unattend}\r\n"
-           "wpeutil reboot\r\n")
-    return winpeshl, cmd
+    load = "".join(f"drvload X:\\Windows\\System32\\{d} >nul\r\n" for d in drivers if d.lower().endswith(".inf"))
+    s = server_ip
+    lines = [
+        "@echo off",
+        "title LANDeploy - Windows network install",
+        "echo Starting the network...",
+        "wpeinit",
+        load.rstrip("\r\n") if load else "rem (no extra drivers)",
+        "set n=0",
+        ":retry",
+        "set /a n+=1",
+        f'ping -n 2 -w 1500 {s} | find "TTL=" >nul && goto connected',
+        f"if %n%==1 echo Waiting for network - connecting to the LANDeploy server {s}...",
+        "ping -n 3 127.0.0.1 >nul",                     # ~2 s between tries (fails instantly with no network)
+        "if not %n%==15 goto retry",
+        "echo.",
+        f"echo === No connection to the LANDeploy server {s} after about a minute ===",
+        "echo This PC's network addresses:",
+        'ipconfig | find "IPv4"',
+        "echo.",
+        "echo  - No IPv4 address above: Windows PE has no driver for this network card.",
+        "echo    Add the card's driver (.inf .sys .cat) on the iPXE network boot page, then reboot this PC.",
+        "echo  - An address is shown: the cable/network or the server's firewall blocks the connection.",
+        "echo.",
+        'echo A command prompt opens for checks (ipconfig, ping). Type "exit" in it to keep trying.',
+        "start /wait cmd",
+        "goto retry",
+        ":connected",
+        f"echo Connected to {s}.",
+        ":share",
+        f'net use Z: \\\\{s}\\{share} /user:{user} "{pw}" >nul 2>&1 && goto setup',
+        f"echo The shared folder \\\\{s}\\{share} is not reachable: set it up on the iPXE network boot page.",
+        "pause",
+        "goto share",
+        ":setup",
+        "echo Starting Windows Setup...",
+        f"Z:\\{folder}\\{entry['id']}\\setup.exe{unattend}",
+        "wpeutil reboot",
+    ]
+    return winpeshl, "\r\n".join(lines) + "\r\n"
 
 
 def clean(text):

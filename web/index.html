@@ -227,7 +227,12 @@ function ipxe(){
       <button class="btn ${x.present?'':'p'}" data-act="fetchtool" data-what="bootfiles" ${x.state==='running'?'disabled':''}>${x.present?'↻ Update':'⬇ Download'}</button></div>
     ${hasWin?`<div class="tool"><div class="ic">📁</div><div class="sp"><b>Shared folder for Windows ISOs</b>
       <div class="muted">Windows Setup reads its files from this server over SMB: set up the share once.</div></div>
-      <button class="btn" data-act="smb">Show setup</button></div>`:''}
+      <button class="btn" data-act="smb">Show setup</button></div>
+    <div class="tool"><div class="ic">🔌</div><div class="sp"><b>Network drivers for the Windows installer</b> ${S.winpe_drivers.length?`<span class="pill ok">${S.winpe_drivers.filter(f=>/\.inf$/i.test(f)).length} driver(s)</span>`:'<span class="pill">none</span>'}
+      <div class="muted">Only if a PC stops at <i>"No connection to the LANDeploy server"</i> with no IPv4 address: the Windows installer lacks a driver for its network card.
+        Add that card's driver files (<span class="mono">.inf .sys .cat</span>, from the PC maker's or Intel/Realtek's site, Windows 10/11 x64).</div>
+      ${S.winpe_drivers.length?`<div class="mono muted" style="margin-top:4px">${S.winpe_drivers.map(esc).join(' · ')}</div>`:''}</div>
+      <div class="row" style="flex-wrap:nowrap"><button class="btn" data-act="addwdrv">+ Add files</button>${S.winpe_drivers.length?'<button class="btn s d" data-act="clrwdrv" title="Remove all">🗑</button>':''}</div></div>`:''}
   </div>
   <details style="margin-top:18px"><summary class="muted">A PC stays on "DHCP…" or says "No boot filename"?</summary><div class="card muted" style="margin-top:8px">
     The PC and this server must be on the <b>same wired network</b>, with a router that gives out IP addresses (LANDeploy doesn't).
@@ -529,6 +534,10 @@ function bind(){
           if(r.problems.length){ $('#wprob').innerHTML = `<div class="pill bad" style="margin-top:8px">⚠️ ${r.problems.map(esc).join(' · ')}</div>`; toast('Saved, but fix the problems shown'); } else toast('Windows setup saved'); return; }
       case 'wpreview': { const r = await api('/api/winprofile/preview', {profile: wpDraft()});
           return dlg(`<h3>Answer file for one PC</h3><p class="muted">Example generated from the current form${r.problems.length?` — <b style="color:var(--bad)">${r.problems.map(esc).join(' · ')}</b>`:''}.</p><pre style="max-height:60vh">${esc(r.xml)}</pre><div class="foot"><button class="btn p" onclick="closeDlg()">Close</button></div>`); }
+      case 'addwdrv': { const inp = document.createElement('input'); inp.type='file'; inp.multiple = true; inp.accept='.inf,.sys,.cat,.dll';
+          inp.onchange = async () => { for(const f of inp.files){ try{ await upload(`/api/upload?kind=winpedrv&name=${encodeURIComponent(f.name)}`, f); }catch(e){ toast(e.message); } }
+            toast(`${inp.files.length} file(s) added`); load(); }; inp.click(); return; }
+      case 'clrwdrv': if(confirm('Remove all Windows installer drivers?')){ await api('/api/winpe-drivers/clear',{}); load(); } return;
       case 'fetchtool': await api('/api/tools/fetch',{what:d.what}); toast('Downloading on the server…'); return load();
       case 'genpkg': { const cmd = genCommand(), id = GEN.id.trim();
           const r = await api('/api/packages',{name:id, os:GEN.type==='winget'?'windows':'linux', command:cmd, args:'', consent:true, run_as:GEN.type==='winget'&&GEN.peruser?'user':'system'});

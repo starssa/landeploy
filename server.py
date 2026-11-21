@@ -27,7 +27,7 @@ import unattend
 import tools
 import pxe
 
-VERSION = "1.6.0"
+VERSION = "1.6.1"
 # RES: bundled read-only files (web/, agent/). HOME: where data/ and bootfiles/ live.
 # When packaged with PyInstaller, RES is the unpack folder and HOME is the folder of the executable.
 FROZEN = getattr(sys, "frozen", False)
@@ -72,7 +72,7 @@ class Store:
 
     def __init__(self, data_dir):
         self.dir = Path(data_dir)
-        for sub in ("isos", "library", "mnt", "unattend", "packages"):
+        for sub in ("isos", "library", "mnt", "unattend", "packages", "winpe-drivers"):
             (self.dir / sub).mkdir(parents=True, exist_ok=True)
         self.file = self.dir / "state.json"
         self.lock = threading.RLock()
@@ -334,6 +334,11 @@ class App:
                 f"chain {base}/menu.ipxe?{ident}&skip=1"]
         return "\n".join(out) + "\n"
 
+    def winpe_drivers(self):
+        """Driver files added for Windows PE (network card drivers WinPE lacks)."""
+        d = self.store.dir / "winpe-drivers"
+        return sorted(f.name for f in d.iterdir() if f.is_file() and re.fullmatch(r"[\w.\-]+", f.name)) if d.is_dir() else []
+
     def win_profile(self):
         return {**unattend.DEFAULT_PROFILE, **self.store.settings.get("win_profile", {})}
 
@@ -374,7 +379,7 @@ class App:
             if mac:
                 st.machine(mac, state="installing", last_deploy=e["name"], last_deploy_at=now())
         st.event(f"{mac or 'A PC'} started installing {e['name']}")
-        return library.boot_script(e, self.base, mac)
+        return library.boot_script(e, self.base, mac, self.winpe_drivers() if e["boot"].get("type") == "windows" else ())
 
 
 def make_handler(app):
@@ -497,6 +502,9 @@ def make_handler(app):
             m = re.fullmatch(r"/isos/([^/]+)", p)
             if m:
                 return self.send_file(st.dir / "isos" / Path(m.group(1)).name)
+            m = re.fullmatch(r"/winpe-drivers/([\w.\-]+)", p)
+            if m:
+                return self.send_file(st.dir / "winpe-drivers" / m.group(1))
             m = re.fullmatch(r"/bootfiles/([\w.\-]+)", p)
             if m:
                 return self.send_file(app.bootfiles / m.group(1))
@@ -504,7 +512,7 @@ def make_handler(app):
             if m and m.group(1) in st.d["library"]:
                 e = st.d["library"][m.group(1)]
                 ans = app.answer_file(e, norm_mac(q.get("mac"))) if m.group(2) == "install.cmd" else None
-                ini, cmd = library.winpe_files(e, st.settings, app.ip, ans)
+                ini, cmd = library.winpe_files(e, st.settings, app.ip, ans, app.winpe_drivers())
                 return self.send(body=ini if m.group(2) == "winpeshl.ini" else cmd)
             m = re.fullmatch(r"/autoinstall/(\w+)/(user-data|meta-data|vendor-data)", p)
             if m and m.group(1) in st.d["library"]:
@@ -578,6 +586,7 @@ def make_handler(app):
                     a["status"] = "on" if now() - a.get("last_seen", 0) < 90 else "off"
                 d["server"]["now"] = now()
                 d["tools"] = app.tools.info()
+                d["winpe_drivers"] = app.winpe_drivers()
                 d["win_profile"] = app.win_profile()
                 d["win_options"] = {"languages": unattend.LANGUAGES, "keyboards": unattend.KEYBOARDS,
                                     "timezones": unattend.TIMEZONES}
@@ -598,6 +607,10 @@ def make_handler(app):
                 name = Path(q.get("name", "upload.bin")).name
                 if q.get("kind") == "iso":
                     dest = st.dir / "isos" / name
+                elif q.get("kind") == "winpedrv":
+                    if not re.fullmatch(r"[\w.\-]+", name):
+                        return self.send(400, {"error": "use simple file names (letters, digits, . - _)"})
+                    dest = st.dir / "winpe-drivers" / name
                 else:
                     pk = st.d["packages"].get(q.get("id", ""))
                     if not pk:
@@ -623,6 +636,8 @@ def make_handler(app):
                 tmp.replace(dest)
                 if q.get("kind") == "iso":
                     app.lib.scan()
+                elif q.get("kind") == "winpedrv":
+                    pass
                 else:
                     pk.update(file=name, sha256=h.hexdigest(), size=dest.stat().st_size)
                     st.save()
@@ -630,6 +645,11 @@ def make_handler(app):
                 return self.send(body={"ok": True})
             if p == "/api/tools/fetch":                    # {what: "bootfiles"}
                 app.tools.fetch(self.body_json().get("what"))
+                return self.send(body={"ok": True})
+            if p == "/api/winpe-drivers/clear":
+                for f in (st.dir / "winpe-drivers").iterdir():
+                    f.unlink()
+                st.event("Removed the Windows PE drivers")
                 return self.send(body={"ok": True})
             if p == "/api/library/scan":
                 return self.send(body={"added": app.lib.scan()})
