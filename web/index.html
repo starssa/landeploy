@@ -66,6 +66,7 @@ pre{background:#0f172a;color:#e2e8f0;padding:14px;border-radius:10px;overflow:au
   <div class="grp">OS install</div>
   <button data-v="os">💿 OS library</button>
   <button data-v="win">🪟 Windows install config</button>
+  <button data-v="post">🧩 Post-install</button>
   <button data-v="ipxe">🥾 iPXE network boot</button>
   <div class="grp">Software install</div>
   <button data-v="sw">📦 Packages</button>
@@ -109,7 +110,7 @@ const online = a => Date.now()/1000 - a.last_seen < 90;
 
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => { view=b.dataset.v; document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('on',x===b)); render(); });
 
-function render(){ $('#view').innerHTML = ({home, pcs, os, win, ipxe, sw, agent, gen, log, set})[view](); bind(); }
+function render(){ $('#view').innerHTML = ({home, pcs, os, win, post, ipxe, sw, agent, gen, log, set})[view](); bind(); }
 const go = v => document.querySelector(`nav [data-v=${v}]`).click();
 
 /* copy that also works on plain http:// LAN addresses (navigator.clipboard needs https) */
@@ -198,7 +199,7 @@ function os(){
 }
 
 function sw(){
-  const P = Object.values(S.packages), J = Object.values(S.jobs).sort((a,b)=>b.created-a.created).slice(0,30);
+  const P = Object.values(S.packages).filter(p=>!p.hidden), J = Object.values(S.jobs).sort((a,b)=>b.created-a.created).slice(0,30);
   const cls = {success:'ok',failed:'bad',denied:'bad',cancelled:'',pending:'acc',asking:'warn',running:'warn'};
   return `<div class="row"><div><h1>Packages</h1><p class="sub">Software to push to PCs that run the agent. By default the user is asked first. Build commands with the <a href="#" data-go="gen">Command generator</a>.</p></div><div class="sp"></div><button class="btn p" data-act="newpkg">+ New package</button></div>
   ${P.length?`<table><tr><th>Package</th><th>Installer</th><th>Consent</th><th></th></tr>${P.map(p=>`<tr><td><b>${esc(p.name)}</b><div class="muted">${esc(p.os||'any')}</div></td>
@@ -345,6 +346,41 @@ function win(){
     ${P.wipe_disk?'<div class="card" style="background:#fef2f2;border-color:#fecaca;margin:6px 0 0 24px">⚠️ Everything on disk 0 of each PC is <b>deleted</b> — fully hands-off install. Double-check which PCs you schedule.</div>':'<div class="muted" style="margin-left:24px">Unticked: the person at the PC chooses where to install.</div>'}
   </div></div>`;
 }
+/* ---------------------------------------------------------------- Post-install page */
+let PID = null;                      // unsaved draft of the post-install settings
+const POST_TPL = `# Runs as SYSTEM on each PC after the packages above, before anyone logs in. Examples:
+# Set-TimeZone -Id "Morocco Standard Time"
+# powercfg /change standby-timeout-ac 0                 # never sleep on mains power
+# New-Item -ItemType Directory -Force C:\\Cours | Out-Null
+# Disable-LocalUser -Name "Guest"
+`;
+function piDraft(){ if(!PID) PID = JSON.parse(JSON.stringify(S.settings.postinstall || {enabled:false, packages:[], script:''})); return PID; }
+function post(){
+  const P = PID || S.settings.postinstall || {enabled:false, packages:[], script:''};
+  const pk = Object.values(S.packages).filter(p=>!p.hidden && (p.file||p.command) && p.os!=='linux');
+  const chosen = P.packages.filter(id=>S.packages[id]), rest = pk.filter(p=>!chosen.includes(p.id));
+  const profileOn = S.win_profile.enabled;
+  let n = 1;
+  return `<div class="row"><div><h1>Post-install</h1><p class="sub">Runs automatically on each PC right after Windows is installed, before anyone logs in. Nobody is asked to confirm.</p></div><div class="sp"></div>
+    <button class="btn p" data-act="pisave">${PID?'💾 Save changes':'Saved ✓'}</button></div>
+  <div class="card" style="margin-bottom:14px"><label class="check" style="margin:0;font-size:15px"><input type="checkbox" id="pi_on" ${P.enabled?'checked':''}> <b>Run these steps after every Windows install</b></label>
+    ${profileOn?'':'<div class="pill warn" style="margin:8px 0 0 24px">Also turn on <a href="#" data-go="win">Windows install config</a>: post-install travels in that answer file.</div>'}
+    <div id="piprob"></div></div>
+  <div style="${P.enabled?'':'opacity:.55'}">
+  <div class="card">
+    <div class="tool"><div class="ic" style="font-size:18px">${n++}.</div><div class="sp"><b>Install the LANDeploy agent</b> <span class="muted">— always first; it installs everything below</span></div></div>
+    ${chosen.map((id,i)=>{ const p=S.packages[id]; return `<div class="tool"><div class="ic" style="font-size:18px">${n++}.</div><div class="sp"><b>${esc(p.name)}</b> ${p.run_as==='user'?'<span class="pill acc">per-user: after first logon</span>':''}
+      <div class="muted mono">${esc(p.command || p.file)}</div></div>
+      <div class="row" style="flex-wrap:nowrap"><button class="btn s" data-act="piup" data-i="${i}" ${i?'':'disabled'} title="Move up">↑</button><button class="btn s" data-act="pidown" data-i="${i}" ${i<chosen.length-1?'':'disabled'} title="Move down">↓</button><button class="btn s d" data-act="pirm" data-i="${i}" title="Remove">✕</button></div></div>`; }).join('')}
+    <div class="tool"><div class="ic" style="font-size:18px">+</div><div class="sp">${rest.length?`<select id="piadd" style="max-width:420px"><option value="">Add a package…</option>${rest.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select>`
+      :`<span class="muted">${pk.length?'All packages are in the list.':'No packages yet — create them in <a href="#" data-go="sw">Packages</a> (e.g. MS Office as a .zip).'}</span>`}</div></div>
+    <div class="tool" style="align-items:flex-start"><div class="ic" style="font-size:18px">${n}.</div><div class="sp"><b>Custom script</b> <span class="muted">(PowerShell, optional)</span> <a href="#" data-act="pitpl">insert examples</a>
+      <textarea id="pi_script" placeholder="# PowerShell commands, run as SYSTEM" style="margin-top:6px">${esc(P.script)}</textarea></div></div>
+  </div>
+  <p class="muted">Progress appears in <a href="#" data-go="sw">Packages</a> → Deployments, marked <i>(post-install)</i>. Packages install silently; per-user apps wait until someone logs in.
+    Only Windows installs that use <b>Windows install config</b> get post-install (not ISOs with their own XML).</p></div>`;
+}
+
 function wpDraft(){ if(!WPD) WPD = JSON.parse(JSON.stringify(S.win_profile)); return WPD; }
 
 function log(){ return `<div class="row"><h1>Activity</h1><div class="sp"></div><button class="btn" data-act="clearlog">Clear</button></div><p class="sub">Everything LANDeploy did.</p>${events(200)}`; }
@@ -423,7 +459,7 @@ function osWizard(macs){
 }
 
 function swWizard(pkgId, agentIds){
-  const P = Object.values(S.packages).filter(p=>p.file||p.command), A = Object.values(S.agents);
+  const P = Object.values(S.packages).filter(p=>!p.hidden && (p.file||p.command)), A = Object.values(S.agents);
   if(!P.length) return toast('Create a package first'); if(!A.length){ toast('No agent yet: install it on the PCs first'); return go('agent'); }
   const w = {pkg:pkgId||null, agents:new Set(agentIds||[])};
   const draw = () => dlg(`<h3>Install software</h3><p class="muted">All selected PCs receive the job within ~20 s and install in parallel.</p>
@@ -490,6 +526,9 @@ function upload(url, file, barEl){ return new Promise((res, rej) => { const x = 
 
 /* ---------------------------------------------------------------- actions */
 function bind(){
+  if($('#pi_on')) $('#pi_on').onchange = e => { piDraft().enabled = e.target.checked; render(); };
+  if($('#piadd')) $('#piadd').onchange = e => { if(e.target.value){ piDraft().packages = [...PID.packages.filter(id=>S.packages[id]), e.target.value]; render(); } };
+  if($('#pi_script')) $('#pi_script').oninput = e => { const was = !!PID; piDraft().script = e.target.value; if(!was) { const b=document.querySelector('[data-act=pisave]'); if(b) b.textContent='💾 Save changes'; } };
   document.querySelectorAll('[data-w]').forEach(el=>el.onchange=()=>{ const D=wpDraft(), k=el.dataset.w;
     D[k] = el.type==='checkbox' ? el.checked : el.type==='number' ? (+el.value||1) : el.value;
     if(k==='language'){ const kb = S.win_options.languages[el.value]?.[1]; if(kb) D.keyboard = kb; } render(); });
@@ -528,6 +567,12 @@ function bind(){
           const r = await api('/api/computers/remove', {macs: keys.filter(k=>k[0]==='m').map(k=>k.slice(2)), agents: keys.filter(k=>k[0]==='a').map(k=>k.slice(2))});
           keys.forEach(k=>SEL.delete(k)); toast(`${r.removed} computer(s) removed`); return load(); }
       case 'wuseall': for(const e of Object.values(S.library).filter(e=>e.boot?.type==='windows')) await api(`/api/library/${e.id}/update`,{answer:'profile'}); toast('All Windows ISOs use this page'); return load();
+      case 'piup': case 'pidown': { const L = piDraft().packages.filter(id=>S.packages[id]), i=+d.i, j = d.act==='piup'?i-1:i+1;
+          [L[i],L[j]]=[L[j],L[i]]; PID.packages = L; return render(); }
+      case 'pirm': { const L = piDraft().packages.filter(id=>S.packages[id]); L.splice(+d.i,1); PID.packages = L; return render(); }
+      case 'pitpl': { const D = piDraft(); D.script = (D.script ? D.script.trimEnd()+'\n\n' : '') + POST_TPL; return render(); }
+      case 'pisave': { const r = await api('/api/postinstall', piDraft()); PID = null; await load();
+          if(r.problems.length){ $('#piprob').innerHTML = `<div class="pill bad" style="margin-top:8px">⚠️ ${r.problems.map(esc).join(' · ')}</div>`; toast('Saved, but see the warning'); } else toast('Post-install saved'); return; }
       case 'wadd': wpDraft().accounts.push({prefix:'User', suffix:'number', count:1, admin:false, password:''}); return render();
       case 'wdel': wpDraft().accounts.splice(+d.i,1); return render();
       case 'wsave': { const r = await api('/api/winprofile', wpDraft()); WPD = null; await load();

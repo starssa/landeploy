@@ -27,7 +27,7 @@ import unattend
 import tools
 import pxe
 
-VERSION = "1.6.3"
+VERSION = "1.7.0"
 # RES: bundled read-only files (web/, agent/). HOME: where data/ and bootfiles/ live.
 # When packaged with PyInstaller, RES is the unpack folder and HOME is the folder of the executable.
 FROZEN = getattr(sys, "frozen", False)
@@ -339,6 +339,30 @@ class App:
         d = self.store.dir / "winpe-drivers"
         return sorted(f.name for f in d.iterdir() if f.is_file() and re.fullmatch(r"[\w.\-]+", f.name)) if d.is_dir() else []
 
+    def postinstall(self):
+        return {"enabled": False, "packages": [], "script": "", **self.store.settings.get("postinstall", {})}
+
+    def post_cmd(self):
+        """One short command (answer files limit its length): a SYSTEM start-up task that fetches the agent
+        from this server 2 minutes after each boot until it succeeds, then removes itself."""
+        tok = self.store.settings["agent_token"]
+        return (f'schtasks /create /tn LANDeployBootstrap /ru SYSTEM /sc onstart /delay 0002:00 /rl highest /f '
+                f'/tr "powershell -NoP -EP Bypass -C irm \'{self.base}/bootstrap.ps1?t={tok}\'|iex"')
+
+    def queue_postinstall(self, aid, mac):
+        """Called with the store lock held when a freshly installed PC's agent reports for the first time."""
+        st, pi = self.store, self.postinstall()
+        pids = [p for p in pi.get("packages", []) if p in st.d["packages"]]
+        if pi.get("script", "").strip() and "postinstall" in st.d["packages"]:
+            pids.append("postinstall")
+        for pid in pids:
+            pk = st.d["packages"][pid]
+            jid = uuid.uuid4().hex[:10]
+            st.d["jobs"][jid] = {"id": jid, "agent_id": aid, "package_id": pid, "package": f"{pk['name']} (post-install)",
+                                 "status": "pending", "message": "", "created": now(), "updated": now(),
+                                 "consent": False, "post": True}     # no "Allow?" prompt right after install
+        return len(pids)
+
     def win_profile(self):
         return {**unattend.DEFAULT_PROFILE, **self.store.settings.get("win_profile", {})}
 
@@ -360,7 +384,13 @@ class App:
                     m["win_number"] = max([int(prof.get("pc_start", 1)) - 2] + used) + 1
                     st.save()
             name = f"{e['id']}-{mac.replace(':', '') or 'any'}.xml"
-            xml = unattend.build(prof, m, m.get("win_number", 0), uefi=(m.get("platform") or "efi") == "efi")
+            post = self.post_cmd() if self.postinstall().get("enabled") else None
+            if post and m:
+                with st.lock:
+                    m["post_pending"] = now()          # queue the post-install when its agent first reports
+                    st.save()
+            xml = unattend.build(prof, m, m.get("win_number", 0), uefi=(m.get("platform") or "efi") == "efi",
+                                 post_cmd=post)
         else:
             return None
         (st.dir / "unattend" / name).write_text(xml, encoding="utf-8")     # outside the (read-only) ISO
@@ -541,6 +571,13 @@ def make_handler(app):
             if m:
                 return self.send_file(app.tools.dir / m.group(1),
                                       download=True)
+            if p == "/bootstrap.ps1":                    # run by the post-install start-up task (SYSTEM)
+                tok = st.settings["agent_token"]
+                if q.get("t") != tok:
+                    return self.send(403, "bad or missing token (?t=...)")
+                return self.send(body=tools.setup_ps1(app.base, tok)
+                                 + "Unregister-ScheduledTask -TaskName 'LANDeployBootstrap' -Confirm:$false "
+                                   "-ErrorAction SilentlyContinue\n")
             if p in ("/setup.ps1", "/setup.cmd", "/setup.sh"):    # one-click agent installers
                 tok = st.settings["agent_token"]
                 if q.get("t") != tok:
@@ -705,6 +742,29 @@ def make_handler(app):
                 st.save()
                 st.event(f"Scheduled {L[b['entry_id']]['name']} on {len(macs)} computer(s) ({mode})")
                 return self.send(body={"ok": True, "count": len(macs)})
+            if p == "/api/postinstall":                    # {enabled, packages: [ids in order], script}
+                b = self.body_json()
+                pi = {"enabled": bool(b.get("enabled")), "packages": [x for x in b.get("packages", []) if x in st.d["packages"]],
+                      "script": b.get("script", "")}
+                st.settings["postinstall"] = pi
+                d = st.dir / "packages" / "postinstall"
+                if pi["script"].strip():                   # the script is shipped like a (hidden) package
+                    d.mkdir(parents=True, exist_ok=True)
+                    body = pi["script"].replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-8-sig")
+                    (d / "postinstall.ps1").write_bytes(body)
+                    st.d["packages"]["postinstall"] = {"id": "postinstall", "name": "Post-install script", "os": "windows",
+                                                       "file": "postinstall.ps1", "sha256": hashlib.sha256(body).hexdigest(),
+                                                       "size": len(body), "args": "", "command": "", "consent": False,
+                                                       "run_as": "system", "hidden": True, "created": now()}
+                else:
+                    st.d["packages"].pop("postinstall", None)
+                    shutil.rmtree(d, ignore_errors=True)
+                st.save()
+                problems = []
+                if pi["enabled"] and not app.win_profile().get("enabled"):
+                    problems.append("Turn on 'Use these settings for Windows installs' in Windows install config: "
+                                    "post-install travels in that answer file.")
+                return self.send(body={"ok": True, "problems": problems})
             if p == "/api/winprofile":                     # save the Windows setup page
                 prof = {**unattend.DEFAULT_PROFILE, **self.body_json()}
                 errs = unattend.check(prof) if prof.get("enabled") else []
@@ -822,7 +882,7 @@ def make_handler(app):
                         if not pk:
                             continue
                         out.append({"job_id": j["id"], "name": pk["name"], "args": pk.get("args", ""),
-                                    "command": pk.get("command", ""), "consent": pk.get("consent", True),
+                                    "command": pk.get("command", ""), "consent": j.get("consent", pk.get("consent", True)),
                                     "run_as": pk.get("run_as", "system"),
                                     "file": pk.get("file", ""), "sha256": pk.get("sha256", ""),
                                     "url": f"{app.base}/pkg/{pk['id']}/{quote(pk['file'])}" if pk.get("file") else ""})
@@ -849,6 +909,9 @@ def make_handler(app):
                             if m.get("state") == "installing" and now() - m.get("last_deploy_at", 0) > 300:
                                 m["state"] = "ready"
                                 st.event(f"{m['name'] or mac} finished installing {m.get('last_deploy', '')}".strip())
+                            if m.pop("post_pending", None):
+                                n = app.queue_postinstall(aid, mac)
+                                st.event(f"Post-install started on {m.get('name') or mac}: {n} item(s)")
                     st.save()
                 if new:
                     st.event(f"Agent registered: {b.get('hostname')} ({b.get('os')})")

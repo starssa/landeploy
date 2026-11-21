@@ -151,7 +151,8 @@ def _disk(uefi):
 """
 
 
-def build(profile, machine=None, number=0, uefi=True):
+def build(profile, machine=None, number=0, uefi=True, post_cmd=None):
+    """post_cmd: command run as SYSTEM in the specialize pass (LANDeploy uses it to schedule post-install)."""
     p = {**DEFAULT_PROFILE, **(profile or {})}
     lang, kb, x = p["language"], p["keyboard"], escape
     locale = f"""      <InputLocale>{x(kb)}</InputLocale>
@@ -177,6 +178,12 @@ def build(profile, machine=None, number=0, uefi=True):
     spec = _c("Microsoft-Windows-Shell-Setup",
               f"      <ComputerName>{x(computer_name(p, machine, number))}</ComputerName>\n"
               f"      <TimeZone>{x(p['timezone'])}</TimeZone>\n")
+    if post_cmd:
+        spec += _c("Microsoft-Windows-Deployment",
+                   "      <RunSynchronous>\n"
+                   f'        <RunSynchronousCommand wcm:action="add"><Order>1</Order><Description>LANDeploy post-install</Description>'
+                   f"<Path>{x(post_cmd)}</Path></RunSynchronousCommand>\n"
+                   "      </RunSynchronous>\n")
     accounts = ""
     for r in p.get("accounts", []):
         for n in account_names(r):
