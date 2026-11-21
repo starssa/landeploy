@@ -89,7 +89,14 @@ Open the firewall ports listed above, for example `sudo ufw allow 67,69,4011,401
 **Windows server**: install Python, run `python fetch_bootfiles.py`, then `python server.py` from an *administrator* terminal, and allow Python through the Windows Firewall. Don't run it on a machine that is already a DHCP server.
 
 ### Windows ISOs (extra step)
-WinPE has to read the full installation files over SMB. Go to **Overview → "show config"** to get a ready-made `smb.conf` block. On Linux, add it to `/etc/samba/smb.conf` and restart `smb`. On a Windows server, share the `data` folder as `landeploy` with read access. Recent Windows Setup builds may refuse guest SMB access. In that case, create a user, share with that user, and enter it under Settings → SMB.
+Windows Setup reads its files from this server over a shared folder (SMB). Windows 11 24H2 and later refuse guest (password-less) shares, so create a share user:
+```bash
+sudo apt install samba
+sudo useradd -M -s /usr/sbin/nologin landeploy && sudo smbpasswd -a landeploy
+```
+Add the `[landeploy]` section shown under **iPXE network boot → Shared folder → Show setup** to `/etc/samba/smb.conf`. Then run `sudo systemctl restart smbd && sudo ufw allow samba`, and enter the same user and password in **Settings → Windows SMB share**.
+
+If a PC stops at "No connection to the LANDeploy server" with no IPv4 address, the Windows installer lacks its network-card driver. Add the driver files under **iPXE network boot → Network drivers for the Windows installer**. For Intel I225/I226 cards, take `e2fn` and `e2f` from the `PRO2500\Winx64` folders of Intel's Complete Driver Pack.
 
 ### Client PCs
 In BIOS/UEFI, enable **Network/PXE boot** (often called "Network Stack" in UEFI). Then either put it first in the boot order, or press F12 (or F9/F11/Esc, depending on the brand) once.

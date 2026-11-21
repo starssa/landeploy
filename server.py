@@ -27,7 +27,7 @@ import unattend
 import tools
 import pxe
 
-VERSION = "1.6.1"
+VERSION = "1.6.2"
 # RES: bundled read-only files (web/, agent/). HOME: where data/ and bootfiles/ live.
 # When packaged with PyInstaller, RES is the unpack folder and HOME is the folder of the executable.
 FROZEN = getattr(sys, "frozen", False)
@@ -591,14 +591,21 @@ def make_handler(app):
                 d["win_options"] = {"languages": unattend.LANGUAGES, "keyboards": unattend.KEYBOARDS,
                                     "timezones": unattend.TIMEZONES}
                 return self.send(body=d)
-            if p == "/api/smbconf":
+            if p == "/api/smbconf":                        # Windows 11 24H2 Setup refuses guest shares: use a user
+                u, d, sh = st.settings.get("smb_user") or "landeploy", st.dir.resolve(), st.settings["smb_share"]
                 return self.send(body=(
-                    f"# Add to /etc/samba/smb.conf, then: sudo systemctl restart smb (or smbd)\n"
-                    f"[{st.settings['smb_share']}]\n   path = {st.dir.resolve()}\n   read only = yes\n"
-                    "   guest ok = yes\n   browseable = yes\n\n[global]\n   map to guest = Bad User\n"
-                    "   server min protocol = SMB2\n\n"
-                    f"# Windows host instead: share the folder {st.dir.resolve()} as '{st.settings['smb_share']}'\n"
-                    "# (read access for Everyone) and fill SMB user/password in Settings."))
+                    f"# 1. Install Samba and create a share user (any password; it is not your login):\n"
+                    f"sudo apt install samba\n"
+                    f"sudo useradd -M -s /usr/sbin/nologin {u}\n"
+                    f"sudo smbpasswd -a {u}\n\n"
+                    f"# 2. Add this at the END of /etc/samba/smb.conf  (sudo nano /etc/samba/smb.conf):\n"
+                    f"[{sh}]\n   path = {d}\n   read only = yes\n   valid users = {u}\n   browseable = yes\n\n"
+                    f"# 3. Restart Samba and open the firewall:\n"
+                    f"sudo systemctl restart smbd\n"
+                    f"sudo ufw allow samba\n\n"
+                    f"# 4. In LANDeploy > Settings > Windows SMB share, enter user '{u}' and the same password.\n\n"
+                    f"# Windows server instead: share the folder {d} as '{sh}' (read access) for a local\n"
+                    f"# user account, and enter that user and password in Settings."))
             self.send(404, {"error": "unknown"})
 
         def admin_post(self, p, q):
