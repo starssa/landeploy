@@ -478,14 +478,14 @@ function swWizard(pkgId, agentIds){
   draw(); wire();
 }
 
-const PRESETS = {'': '', 'MSI (silent)':'/qn /norestart', 'NSIS (/S)':'/S', 'Inno Setup':'/VERYSILENT /NORESTART /SUPPRESSMSGBOXES', 'InstallShield':'/s /v"/qn"', 'MS Office (zip, Click-to-Run)':'setup.exe /configure configuration.xml', 'Folder zip: run setup.exe':'setup.exe'};
+const PRESETS = {'': '', 'MSI (silent)':'/qn /norestart', 'NSIS (/S)':'/S', 'Inno Setup':'/VERYSILENT /NORESTART /SUPPRESSMSGBOXES', 'InstallShield':'/s /v"/qn"', 'MS Office (zip, Click-to-Run)':'setup.exe /configure configuration.xml', 'MS Office (.img from Microsoft)':'setup.exe', 'Folder zip: run setup.exe':'setup.exe'};
 function pkgDialog(id){
   const p = S.packages[id] || {name:'', os:'windows', args:'', command:'', consent:true};
   dlg(`<h3>${id?'Edit':'New'} package</h3>
    <label>Name</label><input id="pname" value="${esc(p.name)}" placeholder="e.g. 7-Zip 24">
    <label>Target OS</label><select id="pos">${['windows','linux','any'].map(o=>`<option ${p.os===o?'selected':''}>${o}</option>`).join('')}</select>
-   <label>Installer file <small>(.msi .exe .ps1 .deb .rpm .sh .AppImage — or a <b>.zip of a whole folder</b>, e.g. Office)</small> ${p.file?`<span class="muted mono">current: ${esc(p.file)}</span>`:''}</label><input type="file" id="pfile">
-   <div class="grid2"><div><label>Silent switches <small>(for a .zip: the command to run inside it)</small></label><input id="pargs" class="mono" value="${esc(p.args)}"></div>
+   <label>Installer file <small>(.msi .exe .ps1 .deb .rpm .sh .AppImage — a <b>.zip of a whole folder</b> — or a disk image <b>.img / .iso</b>, e.g. Microsoft's Office .img)</small> ${p.file?`<span class="muted mono">current: ${esc(p.file)}</span>`:''}</label><input type="file" id="pfile">
+   <div class="grid2"><div><label>Silent switches <small>(for a .zip / .img / .iso: the command to run inside it)</small></label><input id="pargs" class="mono" value="${esc(p.args)}"></div>
    <div><label>Preset</label><select id="ppreset">${Object.keys(PRESETS).map(k=>`<option value="${k}">${k||'—'}</option>`).join('')}</select></div></div>
    <label>…or a command instead of a file <small>e.g. <span class="mono">winget install -e --id 7zip.7zip --silent</span> or <span class="mono">apt-get install -y vlc</span></small></label><input id="pcmd" class="mono" value="${esc(p.command)}">
    <label class="check" style="margin-top:14px"><input type="checkbox" id="pconsent" ${p.consent!==false?'checked':''}> Ask the user for permission before installing</label>

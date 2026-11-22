@@ -27,7 +27,7 @@ import unattend
 import tools
 import pxe
 
-VERSION = "1.7.0"
+VERSION = "1.8.0"
 # RES: bundled read-only files (web/, agent/). HOME: where data/ and bootfiles/ live.
 # When packaged with PyInstaller, RES is the unpack folder and HOME is the folder of the executable.
 FROZEN = getattr(sys, "frozen", False)

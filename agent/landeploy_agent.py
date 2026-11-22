@@ -201,7 +201,38 @@ def zip_command(folder, args):
             if name.endswith(".sh"):
                 return f"sh {name}"
             return name
-    raise ValueError("zip package: set the command to run (e.g. setup.exe /configure configuration.xml)")
+    raise ValueError("package: set the command to run (e.g. setup.exe /configure configuration.xml)")
+
+
+IMAGE_EXT = (".img", ".iso")
+
+
+def mount_image(path, work):
+    """Mount a disk image (e.g. Microsoft's Office .img) read-only; returns its root folder."""
+    if IS_WIN:
+        p = str(path).replace("'", "''")
+        ps = (f"$i = Mount-DiskImage -ImagePath '{p}' -StorageType ISO -Access ReadOnly -PassThru; "
+              "($i | Get-Volume).DriveLetter")
+        r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], capture_output=True, text=True)
+        letter = r.stdout.strip()[-1:]
+        if r.returncode or not letter.isalpha():
+            raise RuntimeError("could not mount the image: " + (r.stderr.strip() or r.stdout.strip())[-300:])
+        return Path(f"{letter}:\\")
+    mnt = work / "image"
+    mnt.mkdir(exist_ok=True)
+    for fs in ("udf", "iso9660"):
+        if subprocess.run(["mount", "-t", fs, "-o", "loop,ro", str(path), str(mnt)], capture_output=True).returncode == 0:
+            return mnt
+    raise RuntimeError("could not mount the image")
+
+
+def unmount_image(path, work):
+    if IS_WIN:
+        p = str(path).replace("'", "''")
+        subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                        f"Dismount-DiskImage -ImagePath '{p}' -ErrorAction SilentlyContinue | Out-Null"], capture_output=True)
+    else:
+        subprocess.run(["umount", str(work / "image")], capture_output=True)
 
 
 def install_cmd(path, args):
@@ -317,6 +348,7 @@ def run_job(cli, job):
             return
     report("running", "Installing..." + (" (as the logged-in user)" if as_user else ""))
     work = job_dir(jid)
+    image = None
     try:
         if job.get("command"):
             cmd, cwd, limit = job["command"], work, 3600
@@ -325,7 +357,12 @@ def run_job(cli, job):
             digest = cli.download(job["url"], path)
             if job.get("sha256") and digest != job["sha256"]:
                 return report("failed", "Checksum mismatch - download corrupted or tampered with.")
-            if path.suffix.lower() == ".zip":                     # folder package: unzip, run command inside
+            if path.suffix.lower() in IMAGE_EXT:                # disk image: mount it, run setup from it
+                report("running", "Mounting the image...")
+                cwd = mount_image(path, work)
+                image = path
+                cmd, limit = zip_command(cwd, job.get("args", "")), 4 * 3600
+            elif path.suffix.lower() == ".zip":                   # folder package: unzip, run command inside
                 report("running", "Extracting package...")
                 cwd = unzip_package(path)
                 cmd, limit = zip_command(cwd, job.get("args", "")), 4 * 3600
@@ -339,6 +376,8 @@ def run_job(cli, job):
     except Exception as e:
         report("failed", repr(e))
     finally:
+        if image:
+            unmount_image(image, work)
         shutil.rmtree(work, ignore_errors=True)
 
 
