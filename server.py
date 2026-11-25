@@ -27,7 +27,7 @@ import unattend
 import tools
 import pxe
 
-VERSION = "1.8.1"
+VERSION = "1.8.2"
 # RES: bundled read-only files (web/, agent/). HOME: where data/ and bootfiles/ live.
 # When packaged with PyInstaller, RES is the unpack folder and HOME is the folder of the executable.
 FROZEN = getattr(sys, "frozen", False)
@@ -923,6 +923,12 @@ def make_handler(app):
                 if j["status"] == "cancelled":
                     return self.send(body={"cancelled": True})
                 j.update(status=b.get("status", j["status"]), message=str(b.get("message", ""))[-2000:], updated=now())
+                if "percent" in b:
+                    j["percent"] = max(-1, min(100, int(b.get("percent") or 0)))
+                if "phase" in b:
+                    j["phase"] = str(b.get("phase", ""))[:40]
+                if j["status"] != "running":
+                    j.pop("percent", None); j.pop("phase", None)
                 st.save()
                 if j["status"] in ("success", "failed", "denied"):
                     host = st.d["agents"].get(j["agent_id"], {}).get("hostname", "?")

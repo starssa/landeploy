@@ -26,7 +26,7 @@ import urllib.request
 import uuid
 from pathlib import Path
 
-VERSION = "1.3"
+VERSION = "1.4"
 IS_WIN = os.name == "nt"
 
 # When packaged (PyInstaller / AppImage), our bundled libraries must not leak into the system
@@ -105,16 +105,21 @@ class Client:
         with urllib.request.urlopen(req, timeout=30) as r:
             return json.loads(r.read() or b"{}")
 
-    def download(self, url, dest):
+    def download(self, url, dest, on_progress=None):
         req = urllib.request.Request(url, headers={"X-Agent-Token": self.token})
         h = hashlib.sha256()
         with urllib.request.urlopen(req, timeout=60) as r, open(dest, "wb") as f:
+            total = int(r.headers.get("Content-Length") or 0)
+            done = 0
             while True:
                 chunk = r.read(1 << 20)
                 if not chunk:
                     break
                 f.write(chunk)
                 h.update(chunk)
+                done += len(chunk)
+                if on_progress:
+                    on_progress(done, total)
         return h.hexdigest()
 
 
@@ -346,13 +351,84 @@ def run_user(cmd, cwd, timeout, jid):
                         f"Unregister-ScheduledTask -TaskName '{task}' -Confirm:$false"], capture_output=True)
 
 
+PROGRESS_DIR = (STATE.parent / "progress")
+
+
+def write_progress(jid, name, phase, percent, done=False):
+    try:
+        PROGRESS_DIR.mkdir(parents=True, exist_ok=True)
+        (PROGRESS_DIR / f"{jid}.json").write_text(json.dumps(
+            {"name": name, "phase": phase or "", "percent": percent if percent is not None else -1, "done": done}))
+    except Exception:
+        pass
+
+
+PROGRESS_PS1 = r"""
+param([string]$File,[string]$Title)
+Add-Type -AssemblyName System.Windows.Forms,System.Drawing
+$f = New-Object Windows.Forms.Form
+$f.Text = "LANDeploy"; $f.Size = '440,150'; $f.StartPosition='CenterScreen'; $f.TopMost=$true
+$f.FormBorderStyle='FixedDialog'; $f.MaximizeBox=$false; $f.MinimizeBox=$false
+$l = New-Object Windows.Forms.Label; $l.Location='15,15'; $l.Size='400,40'; $l.Text=$Title; $f.Controls.Add($l)
+$b = New-Object Windows.Forms.ProgressBar; $b.Location='15,65'; $b.Size='400,24'; $b.Minimum=0; $b.Maximum=100; $f.Controls.Add($b)
+$t = New-Object Windows.Forms.Timer; $t.Interval=800
+$t.Add_Tick({
+  if(-not (Test-Path $File)){ $f.Close(); return }
+  try { $j = Get-Content $File -Raw | ConvertFrom-Json } catch { return }
+  $p = [int]$j.percent
+  if($p -lt 0){ $b.Style='Marquee' } else { $b.Style='Blocks'; $b.Value=[Math]::Min(100,[Math]::Max(0,$p)) }
+  $l.Text = "$($j.name)`r`n$($j.phase)" + ($(if($p -ge 0){" $p%"}else{""}))
+  if($j.done){ $t.Stop(); Start-Sleep -Milliseconds 600; $f.Close() }
+})
+$t.Start(); [void]$f.ShowDialog()
+"""
+
+
+def show_progress_window(jid):
+    """Best-effort: show a small progress window on the logged-in user's desktop (Windows)."""
+    if not IS_WIN:
+        return
+    try:
+        if not logged_on_user():
+            return
+        PROGRESS_DIR.mkdir(parents=True, exist_ok=True)
+        ps1 = PROGRESS_DIR / "progress.ps1"
+        ps1.write_text(PROGRESS_PS1, encoding="utf-8")
+        jfile = PROGRESS_DIR / f"{jid}.json"
+        launch_in_user_session(["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass",
+                                "-File", str(ps1), "-File", str(jfile), "-Title", "Installing software..."], jid)
+    except Exception as e:
+        print("progress window:", e)
+
+
+def launch_in_user_session(cmd, jid):
+    """Start a program as the logged-in user without waiting (for the progress UI)."""
+    user = logged_on_user()
+    if not user:
+        return
+    task = f"LANDeployUI-{jid}"
+    line = subprocess.list2cmdline(cmd)
+    ps = (f"$a = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -WindowStyle Hidden "
+          f"-Command \"{line.replace(chr(34), chr(39))}\"'; "
+          f"$p = New-ScheduledTaskPrincipal -UserId '{user}' -LogonType Interactive -RunLevel Limited; "
+          f"Register-ScheduledTask -TaskName '{task}' -Action $a -Principal $p -Force | Out-Null; "
+          f"Start-ScheduledTask -TaskName '{task}'")
+    subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], capture_output=True)
+
+
 def run_job(cli, job):
     jid = job["job_id"]
     as_user = job.get("run_as") == "user"
 
-    def report(status, msg=""):
+    def report(status, msg="", percent=None, phase=None):
+        write_progress(jid, job.get("name", ""), phase, percent, done=status in ("success", "failed", "denied", "cancelled"))
+        body = {"job_id": jid, "status": status, "message": msg}
+        if percent is not None:
+            body["percent"] = percent
+        if phase is not None:
+            body["phase"] = phase
         try:
-            return cli.call("/api/agent/report", {"job_id": jid, "status": status, "message": msg})
+            return cli.call("/api/agent/report", body)
         except Exception as e:
             print("report failed:", e)
             return {}
@@ -376,22 +452,34 @@ def run_job(cli, job):
             cmd, cwd, limit = job["command"], work, 3600
         else:
             path = work / job["file"]
-            digest = cli.download(job["url"], path)
+            show_progress_window(jid)
+            last = [0.0]
+
+            def on_dl(done, total):
+                import time as _t
+                pct = int(done * 100 / total) if total else 0
+                if _t.time() - last[0] > 1.5 or pct >= 100:
+                    last[0] = _t.time()
+                    mb = f"{done >> 20} MB" + (f" / {total >> 20} MB" if total else "")
+                    report("running", f"Downloading {job['file']} ({mb})", percent=pct, phase="Downloading")
+
+            digest = cli.download(job["url"], path, on_dl)
             if job.get("sha256") and digest != job["sha256"]:
                 return report("failed", "Checksum mismatch - download corrupted or tampered with.")
             if path.suffix.lower() in IMAGE_EXT:                # disk image: mount it, run setup from it
-                report("running", "Mounting the image...")
+                report("running", "Mounting the image...", phase="Mounting")
                 cwd = mount_image(path, work)
                 image = path
                 cmd, limit = zip_command(cwd, job.get("args", "")), 4 * 3600
             elif path.suffix.lower() == ".zip":                   # folder package: unzip, run command inside
-                report("running", "Extracting package...")
+                report("running", "Extracting package...", phase="Extracting")
                 cwd = unzip_package(path)
                 cmd, limit = zip_command(cwd, job.get("args", "")), 4 * 3600
             else:
                 if not IS_WIN:
                     path.chmod(0o755)
                 cmd, cwd, limit = install_cmd(path, job.get("args", "")), work, 3600
+        report("running", "Installing...", phase="Installing")
         code, out = run_user(cmd, cwd, limit, jid) if as_user else run_system(cmd, cwd, limit)
         ok = code in (0, 3010, 1641)                               # 3010/1641 = success, reboot required
         report("success" if ok else "failed", f"exit code {code}\n{out[-1500:]}")
@@ -400,6 +488,14 @@ def run_job(cli, job):
     finally:
         if image:
             unmount_image(image, work)
+        if IS_WIN:
+            subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                            f"Unregister-ScheduledTask -TaskName 'LANDeployUI-{jid}' -Confirm:$false "
+                            "-ErrorAction SilentlyContinue"], capture_output=True)
+        try:
+            (PROGRESS_DIR / f"{jid}.json").unlink()
+        except Exception:
+            pass
         shutil.rmtree(work, ignore_errors=True)
 
 

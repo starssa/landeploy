@@ -47,7 +47,8 @@ dialog::backdrop{background:rgba(15,23,42,.45)}
 .dlg{padding:22px 24px}.dlg h3{margin:0 0 4px;font-size:18px}.dlg .foot{display:flex;gap:8px;justify-content:flex-end;margin-top:20px}
 .check-list li{margin:6px 0}.drop{border:2px dashed #cbd5e1;border-radius:12px;padding:22px;text-align:center;color:var(--mute);cursor:pointer;background:#fff}
 .drop.hov{border-color:var(--acc);background:#f5f9ff}
-.bar{height:6px;background:var(--line);border-radius:6px;overflow:hidden;margin-top:8px}.bar i{display:block;height:100%;background:var(--acc);width:0}
+.bar{height:6px;background:var(--line);border-radius:6px;overflow:hidden;margin-top:8px}.bar i{display:block;height:100%;background:var(--acc);width:0;transition:width .4s}
+.bar i.indet{width:40%;animation:indet 1.2s infinite ease-in-out}@keyframes indet{0%{margin-left:-40%}100%{margin-left:100%}}
 .toast{position:fixed;bottom:20px;right:20px;background:#111827;color:#fff;padding:10px 16px;border-radius:10px;opacity:0;transition:.25s;pointer-events:none}.toast.on{opacity:1}
 pre{background:#0f172a;color:#e2e8f0;padding:14px;border-radius:10px;overflow:auto;font-size:12.5px}
 .cmd{display:flex;gap:8px;align-items:stretch;margin:6px 0 4px}.cmd code{flex:1;background:#0f172a;color:#e2e8f0;padding:10px 12px;border-radius:8px;font:12.5px ui-monospace,monospace;word-break:break-all}
@@ -201,6 +202,9 @@ function os(){
 function sw(){
   const P = Object.values(S.packages).filter(p=>!p.hidden), J = Object.values(S.jobs).sort((a,b)=>b.created-a.created).slice(0,30);
   const cls = {success:'ok',failed:'bad',denied:'bad',cancelled:'',pending:'acc',asking:'warn',running:'warn'};
+  const jobBar = j => { const p = typeof j.percent==='number'?j.percent:-1; const ph = esc(j.phase||'Working');
+    return `<div style="margin-top:4px"><div class="muted" style="font-size:12px">${ph}${p>=0?' · '+p+'%':''}</div>
+      <div class="bar" style="max-width:260px">${p>=0?`<i style="width:${p}%"></i>`:`<i class="indet"></i>`}</div></div>`; };
   return `<div class="row"><div><h1>Packages</h1><p class="sub">Software to push to PCs that run the agent. By default the user is asked first. Build commands with the <a href="#" data-go="gen">Command generator</a>.</p></div><div class="sp"></div><button class="btn p" data-act="newpkg">+ New package</button></div>
   ${P.length?`<table><tr><th>Package</th><th>Installer</th><th>Consent</th><th></th></tr>${P.map(p=>`<tr><td><b>${esc(p.name)}</b><div class="muted">${esc(p.os||'any')}</div></td>
     <td class="mono">${p.command?esc(p.command):p.file?esc(p.file)+' '+esc(p.args||'')+` <span class="muted">(${size(p.size)})</span>`:'<span class="pill bad">no file</span>'}</td>
@@ -208,7 +212,7 @@ function sw(){
     <td><div class="row"><button class="btn s p" data-act="sww" data-pkg="${p.id}">Deploy…</button><button class="btn s" data-act="newpkg" data-id="${p.id}">Edit</button><button class="btn s d" data-act="delpkg" data-id="${p.id}">Delete</button></div></td></tr>`).join('')}</table>`:'<div class="card empty">No packages yet.</div>'}
   <h2>Deployments</h2>
   ${J.length?`<table><tr><th>When</th><th>Package</th><th>Computer</th><th>Status</th><th></th></tr>${J.map(j=>`<tr><td class="muted">${ago(j.created)}</td><td>${esc(j.package)}</td><td>${esc(S.agents[j.agent_id]?.hostname||'?')}</td>
-    <td><span class="pill ${cls[j.status]||''}">${j.status}</span>${j.message?`<details><summary class="muted">details</summary><pre>${esc(j.message)}</pre></details>`:''}</td>
+    <td><span class="pill ${cls[j.status]||''}">${j.status}</span>${j.status==='running'?jobBar(j):''}${j.message?`<details><summary class="muted">details</summary><pre>${esc(j.message)}</pre></details>`:''}</td>
     <td>${['pending','asking'].includes(j.status)?`<button class="btn s d" data-act="canceljob" data-id="${j.id}">Cancel</button>`:''}</td></tr>`).join('')}</table>`:'<div class="card empty">No deployments yet.</div>'}`;
 }
 
