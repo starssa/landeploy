@@ -28,6 +28,40 @@ IS_WIN, IS_MAC = os.name == "nt", sys.platform == "darwin"
 FROZEN = getattr(sys, "frozen", False)
 PORT = 8080
 
+# PyInstaller and the AppImage runtime prepend their own bundled libraries to the environment.
+# System programs we launch (zenity, the browser, xdg-open) must NOT inherit those, or they load a
+# mismatched mix of our bundled libs and the system libs and crash (e.g. the libpango/fontconfig
+# "undefined symbol: FcConfigSetDefaultSubstitute" error). Restore the pre-launch values.
+_HOST_ENV_VARS = ("LD_LIBRARY_PATH", "LD_PRELOAD", "GTK_PATH", "GTK_EXE_PREFIX", "GTK_DATA_PREFIX",
+                  "GDK_PIXBUF_MODULE_FILE", "GDK_PIXBUF_MODULEDIR", "GIO_MODULE_DIR", "GI_TYPELIB_PATH",
+                  "GSETTINGS_SCHEMA_DIR", "FONTCONFIG_FILE", "FONTCONFIG_PATH", "GCONV_PATH",
+                  "QT_PLUGIN_PATH", "XDG_DATA_DIRS", "PYTHONHOME", "PYTHONPATH")
+
+
+def host_env():
+    env = dict(os.environ)
+    for var in _HOST_ENV_VARS:
+        orig = env.pop(var + "_ORIG", None)      # PyInstaller saves the original here
+        if orig:
+            env[var] = orig
+        else:
+            env.pop(var, None)                   # AppImage sets it with no _ORIG: drop it entirely
+    return env
+
+
+def open_url(url):
+    """Open the console in the user's default browser, with a clean environment."""
+    for opener in (["xdg-open", url], ["gio", "open", url]):
+        if shutil.which(opener[0]):
+            try:
+                subprocess.Popen(opener, env=host_env(),
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return
+            except Exception:
+                pass
+    import webbrowser
+    webbrowser.open(url)
+
 
 # ------------------------------------------------------------------ locations
 def exe_path():
@@ -250,35 +284,43 @@ def show_native(url):
 def show_browser_app(url, browser):
     profile = Path.home() / ".cache" / "landeploy-window"
     p = subprocess.Popen([browser, f"--app={url}", f"--user-data-dir={profile}", "--no-first-run",
-                          "--no-default-browser-check", "--window-size=1300,850"])
+                          "--no-default-browser-check", "--window-size=1300,850"], env=host_env())
     p.wait()                                     # separate profile => this process lives as long as the window
 
 
 def show_control_window(url, note):
-    """Fallback: small window that keeps LANDeploy running and opens the console in the default browser."""
-    import webbrowser
-    webbrowser.open(url)
+    """Keep LANDeploy running and give a reliable way to stop it, without needing a terminal."""
+    open_url(url)
     try:
         import tkinter as tk
     except Exception:
-        print(f"{APP} is running: {url}  (press Ctrl+C to stop)")
-        try:
-            while True:
-                time.sleep(3600)
-        except KeyboardInterrupt:
-            return
-    root = tk.Tk()
-    root.title(APP)
-    root.geometry("420x170")
-    tk.Label(root, text=f"{APP} is running", font=("Sans", 14, "bold")).pack(pady=(16, 4))
-    tk.Label(root, text=url, fg="#2563eb").pack()
-    if note:
-        tk.Label(root, text=note, wraplength=380, fg="#92400e").pack(pady=4)
-    row = tk.Frame(root)
-    row.pack(pady=10)
-    tk.Button(row, text="Open console", command=lambda: webbrowser.open(url)).pack(side="left", padx=6)
-    tk.Button(row, text="Stop LANDeploy", command=root.destroy).pack(side="left", padx=6)
-    root.mainloop()
+        tk = None
+    if tk is not None:
+        root = tk.Tk()
+        root.title(APP)
+        root.geometry("440x180")
+        tk.Label(root, text=f"{APP} is running", font=("Sans", 14, "bold")).pack(pady=(16, 4))
+        tk.Label(root, text=url, fg="#2563eb").pack()
+        if note:
+            tk.Label(root, text=note, wraplength=400, fg="#92400e").pack(pady=4)
+        row = tk.Frame(root)
+        row.pack(pady=10)
+        tk.Button(row, text="Open console", command=lambda: open_url(url)).pack(side="left", padx=6)
+        tk.Button(row, text="Stop LANDeploy", command=root.destroy).pack(side="left", padx=6)
+        root.mainloop()
+        return
+    if shutil.which("zenity"):                   # no tkinter (minimal build): a plain GTK dialog still works
+        text = f"{APP} is running.\n\n{url}\n\n{note}\n\nClose this window (or click OK) to stop LANDeploy."
+        subprocess.run(["zenity", "--info", "--title", APP, "--width", "420",
+                        "--ok-label", "Stop LANDeploy", "--text", text], env=host_env())
+        return
+    print(f"{APP} is running: {url}")
+    print("Close this terminal or press Ctrl+C to stop.")
+    try:
+        while True:
+            time.sleep(3600)
+    except KeyboardInterrupt:
+        return
 
 
 def error_box(msg):
@@ -288,7 +330,7 @@ def error_box(msg):
     elif IS_MAC:
         subprocess.run(["osascript", "-e", f'display alert "{APP}" message "{_as_quote(msg)}" as critical'])
     elif shutil.which("zenity"):
-        subprocess.run(["zenity", "--error", "--title", APP, "--text", msg])
+        subprocess.run(["zenity", "--error", "--title", APP, "--text", msg], env=host_env())
     else:
         print(msg, file=sys.stderr)
 

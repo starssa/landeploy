@@ -26,8 +26,28 @@ import urllib.request
 import uuid
 from pathlib import Path
 
-VERSION = "1.2"
+VERSION = "1.3"
 IS_WIN = os.name == "nt"
+
+# When packaged (PyInstaller / AppImage), our bundled libraries must not leak into the system
+# programs we launch (zenity, apt, installers) or they crash on a library/symbol mismatch.
+_HOST_ENV_VARS = ("LD_LIBRARY_PATH", "LD_PRELOAD", "GTK_PATH", "GDK_PIXBUF_MODULE_FILE",
+                  "GDK_PIXBUF_MODULEDIR", "GIO_MODULE_DIR", "GI_TYPELIB_PATH", "GSETTINGS_SCHEMA_DIR",
+                  "FONTCONFIG_FILE", "FONTCONFIG_PATH", "GCONV_PATH", "QT_PLUGIN_PATH", "XDG_DATA_DIRS",
+                  "PYTHONHOME", "PYTHONPATH")
+
+
+def host_env(extra=None):
+    env = dict(os.environ)
+    for var in _HOST_ENV_VARS:
+        orig = env.pop(var + "_ORIG", None)
+        if orig:
+            env[var] = orig
+        else:
+            env.pop(var, None)
+    if extra:
+        env.update(extra)
+    return env
 if IS_WIN:
     AGENT_DIR = Path(os.environ.get("PROGRAMDATA", "C:\\ProgramData")) / "LANDeploy-Agent"
     STATE = AGENT_DIR / "agent.json"
@@ -147,12 +167,12 @@ def ask_user(title, text, timeout=300):
     if os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
         for exe, args in (("zenity", zen), ("kdialog", ["--title", title, "--yesno", text])):
             if shutil.which(exe):
-                return subprocess.run([exe] + args).returncode == 0
+                return subprocess.run([exe] + args, env=host_env()).returncode == 0
     elif os.geteuid() == 0 and shutil.which("zenity"):          # root service: ask the desktop user
         user, env = _linux_session()
         if user:
             cmd = ["runuser", "-u", user, "--", "env"] + [f"{k}={v}" for k, v in env.items()] + ["zenity"] + zen
-            return subprocess.run(cmd).returncode == 0
+            return subprocess.run(cmd, env=host_env()).returncode == 0
     if sys.stdin and sys.stdin.isatty():
         return input(f"{title}\n{text}\nInstall? [y/N] ").strip().lower() in ("y", "yes")
     return False
@@ -283,7 +303,8 @@ def job_dir(jid):
 def run_system(cmd, cwd, timeout):
     if isinstance(cmd, str):
         cmd = fix_command(cmd)
-    r = subprocess.run(cmd, shell=isinstance(cmd, str), capture_output=True, text=True, timeout=timeout, cwd=cwd)
+    r = subprocess.run(cmd, shell=isinstance(cmd, str), capture_output=True, text=True, timeout=timeout,
+                       cwd=cwd, env=host_env())
     return r.returncode, (r.stdout or "") + (r.stderr or "")
 
 
@@ -295,7 +316,8 @@ def run_user(cmd, cwd, timeout, jid):
     if not IS_WIN:
         user, env = _linux_session()
         r = subprocess.run(["runuser", "-u", user, "--", "env"] + [f"{k}={v}" for k, v in env.items()] +
-                           ["sh", "-c", line], capture_output=True, text=True, timeout=timeout, cwd=cwd)
+                           ["sh", "-c", line], capture_output=True, text=True, timeout=timeout, cwd=cwd,
+                           env=host_env())
         return r.returncode, (r.stdout or "") + (r.stderr or "")
     user = logged_on_user()
     log, rc, bat = cwd / "out.log", cwd / "rc.txt", cwd / "run.cmd"
